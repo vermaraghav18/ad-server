@@ -1,5 +1,5 @@
 // server.js
-require("dotenv").config(); // ← load .env first
+require("dotenv").config(); // load env first
 
 const express = require("express");
 const cors = require("cors");
@@ -17,15 +17,44 @@ const connectDB = require("./db");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Connect to MongoDB (uses MONGO_URI from .env)
-connectDB();
+// --- CORS (optional allowlist via env) ---
+/*
+  Set CORS_ORIGINS in env as a comma-separated list, e.g.
+  https://your-admin.vercel.app,https://your-app.web.app
+*/
+const allowlist = (process.env.CORS_ORIGINS || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
 
-// Middleware
-app.use(cors()); // you can tighten this later with origin: [...]
-app.use(express.json({ limit: "1mb" }));
+app.use(
+  cors(
+    allowlist.length
+      ? {
+          origin(origin, cb) {
+            // allow no-origin (e.g., curl, Postman) and allowlisted origins
+            if (!origin || allowlist.includes(origin)) return cb(null, true);
+            return cb(new Error("Not allowed by CORS"));
+          },
+          credentials: true,
+        }
+      : {} // open CORS if no allowlist set
+  )
+);
+
+// Trust Render/other proxies (optional but handy)
+app.set("trust proxy", 1);
+
+// Body parsing
+app.use(express.json({ limit: "2mb" }));
+
+// Static files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Routes
+// --- Connect to MongoDB (uses MONGODB_URI) ---
+connectDB();
+
+// --- Routes ---
 app.use("/api/ads", adsRouter);
 app.use("/api", movieRouter); // movies (in theatres + trailers)
 app.use("/api/movie-banners", moviePromoBannerRouter);
@@ -33,17 +62,16 @@ app.use("/api/feeds", feedRouter);
 app.use("/api/shorts", shortsRouter);
 app.use("/api/tweets", tweetsRouter);
 
-// Health check
-app.get("/", (_req, res) => {
-  res.send("✅ Ad Server Running");
-});
+// Health checks
+app.get("/", (_req, res) => res.send("✅ Ad Server Running"));
+app.get("/healthz", (_req, res) => res.status(200).json({ ok: true }));
 
-// 404 (optional but handy)
+// 404
 app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
 });
 
-// Error handler (optional)
+// Error handler
 app.use((err, _req, res, _next) => {
   console.error("Server error:", err);
   res.status(500).json({ error: "Server error" });
@@ -51,5 +79,5 @@ app.use((err, _req, res, _next) => {
 
 // Start server
 app.listen(PORT, () => {
-  console.log(`✅ Ad Server running at http://localhost:${PORT}`);
+  console.log(`✅ Ad Server listening on port ${PORT}`);
 });
