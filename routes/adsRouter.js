@@ -95,7 +95,7 @@ router.delete("/:id", (req, res) => {
   const ad = ads.find(ad => ad.id === id);
   if (!ad) return res.status(404).json({ error: "Ad not found" });
 
-  const imagePath = path.join(__dirname, "../", ad.imageUrl);
+  const imagePath = path.join(__dirname, "..", "uploads", "ads", path.basename(ad.imageUrl));
   if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
 
   ads = ads.filter(ad => ad.id !== id);
