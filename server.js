@@ -20,31 +20,73 @@ const connectDB = require("./db");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-/* ---------------- CORS (env allowlist) ----------------
-   Set CORS_ORIGINS in Render env as a comma-separated list, e.g.:
-   CORS_ORIGINS=https://ad-admin-panel-eta.vercel.app,http://localhost:3000
--------------------------------------------------------- */
-const allowlist = (process.env.CORS_ORIGINS || "")
-  .split(",")
-  .map(s => s.trim())
-  .filter(Boolean);
+/* -------------------- CORS (robust allowlist) --------------------
+   Put your allowed origins in the Render env var CORS_ORIGINS as a
+   SINGLE comma-separated line. Example:
 
-app.use(
-  cors(
-    allowlist.length
-      ? {
-          origin(origin, cb) {
-            // allow no-origin (curl/Postman) and allowlisted origins
-            if (!origin || allowlist.includes(origin)) return cb(null, true);
-            return cb(new Error("Not allowed by CORS"));
-          },
-          credentials: false,
-        }
-      : {} // open CORS if no allowlist set
-  )
-);
+   CORS_ORIGINS=https://ad-admin-panel-eta.vercel.app,https://ad-admin-panel-git-main-vermaraghav18s-projects.vercel.app
 
-// Trust Render/other proxies (optional but handy)
+   Notes:
+   - We also always allow http://localhost:3000 for dev
+   - We tolerate accidental spaces/newlines in the env var
+   - Supports wildcard entries like "https://*.vercel.app" if you
+     want to allow all preview URLs (optional)
+------------------------------------------------------------------ */
+function parseAllowlist(input) {
+  return (input || "")
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+// read env, tolerate newlines
+const allowlist = parseAllowlist(process.env.CORS_ORIGINS);
+
+// always allow localhost for dev
+if (!allowlist.includes("http://localhost:3000")) {
+  allowlist.push("http://localhost:3000");
+}
+
+// helper: does origin match an entry (supports wildcard "*.domain.tld")
+function matchesOrigin(origin, entry) {
+  if (!origin) return true; // no Origin header (e.g. curl/Postman) → allow
+  try {
+    const o = new URL(origin);
+    const e = new URL(entry.replace("*.", "")); // normalize for scheme
+    const wildcard = entry.includes("*.");
+    const sameScheme = o.protocol === e.protocol;
+    if (!sameScheme) return false;
+
+    if (wildcard) {
+      // allow any subdomain of e.hostname
+      return o.hostname === e.hostname || o.hostname.endsWith("." + e.hostname);
+    }
+    // exact match
+    return origin === entry;
+  } catch {
+    // fallback: strict equality
+    return origin === entry;
+  }
+}
+
+const corsOptions = {
+  origin(origin, cb) {
+    const ok = allowlist.some(entry => matchesOrigin(origin, entry));
+    if (ok) return cb(null, true);
+    console.error("[CORS] blocked origin:", origin, "allowlist:", allowlist);
+    return cb(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+};
+
+// log the active allowlist once on boot
+console.log("[CORS] allowlist:", allowlist);
+
+// preflight first, then main CORS
+app.options("*", cors(corsOptions));
+app.use(cors(corsOptions));
+
+// Trust Render/other proxies (optional)
 app.set("trust proxy", 1);
 
 // Body parsing
@@ -55,7 +97,7 @@ const baseUploadDir = path.join(__dirname, "uploads");
 const promoDir = path.join(baseUploadDir, "movie-banners");
 fs.mkdirSync(promoDir, { recursive: true });
 
-// Serve uploads publicly (so posterUrl works)
+// Serve uploads publicly (so posterUrl works if any local files exist)
 app.use("/uploads", express.static(baseUploadDir));
 /* -------------------------------------------------------- */
 
