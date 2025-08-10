@@ -20,18 +20,7 @@ const connectDB = require("./db");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-/* -------------------- CORS (robust allowlist) --------------------
-   Put your allowed origins in the Render env var CORS_ORIGINS as a
-   SINGLE comma-separated line. Example:
-
-   CORS_ORIGINS=https://ad-admin-panel-eta.vercel.app,https://ad-admin-panel-git-main-vermaraghav18s-projects.vercel.app
-
-   Notes:
-   - We also always allow http://localhost:3000 for dev
-   - We tolerate accidental spaces/newlines in the env var
-   - Supports wildcard entries like "https://*.vercel.app" if you
-     want to allow all preview URLs (optional)
------------------------------------------------------------------- */
+/* -------------------- CORS (robust allowlist) -------------------- */
 function parseAllowlist(input) {
   return (input || "")
     .split(",")
@@ -39,7 +28,6 @@ function parseAllowlist(input) {
     .filter(Boolean);
 }
 
-// read env, tolerate newlines
 const allowlist = parseAllowlist(process.env.CORS_ORIGINS);
 
 // always allow localhost for dev
@@ -47,24 +35,19 @@ if (!allowlist.includes("http://localhost:3000")) {
   allowlist.push("http://localhost:3000");
 }
 
-// helper: does origin match an entry (supports wildcard "*.domain.tld")
 function matchesOrigin(origin, entry) {
-  if (!origin) return true; // no Origin header (e.g. curl/Postman) → allow
+  if (!origin) return true; // allow non-browser requests (no Origin)
   try {
     const o = new URL(origin);
-    const e = new URL(entry.replace("*.", "")); // normalize for scheme
+    const e = new URL(entry.replace("*.", ""));
     const wildcard = entry.includes("*.");
     const sameScheme = o.protocol === e.protocol;
     if (!sameScheme) return false;
-
     if (wildcard) {
-      // allow any subdomain of e.hostname
       return o.hostname === e.hostname || o.hostname.endsWith("." + e.hostname);
     }
-    // exact match
     return origin === entry;
   } catch {
-    // fallback: strict equality
     return origin === entry;
   }
 }
@@ -79,25 +62,18 @@ const corsOptions = {
   credentials: true,
 };
 
-// log the active allowlist once on boot
 console.log("[CORS] allowlist:", allowlist);
 
-// preflight first, then main CORS
-app.options("*", cors(corsOptions));
+// ✅ Global CORS (preflight handled here too)
 app.use(cors(corsOptions));
 
-// Trust Render/other proxies (optional)
 app.set("trust proxy", 1);
-
-// Body parsing
 app.use(express.json({ limit: "2mb" }));
 
 /* ----------- Ensure upload dirs exist & static ---------- */
 const baseUploadDir = path.join(__dirname, "uploads");
 const promoDir = path.join(baseUploadDir, "movie-banners");
 fs.mkdirSync(promoDir, { recursive: true });
-
-// Serve uploads publicly (so posterUrl works if any local files exist)
 app.use("/uploads", express.static(baseUploadDir));
 /* -------------------------------------------------------- */
 
@@ -128,7 +104,6 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: "Server error" });
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`✅ Ad Server listening on port ${PORT}`);
 });
