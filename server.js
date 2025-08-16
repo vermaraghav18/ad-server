@@ -10,6 +10,7 @@ const fs = require("fs");
 const adsRouter = require("./routes/adsRouter");
 const movieRouter = require("./routes/movieRouter");
 const moviePromoBannerRouter = require("./routes/moviePromoBannerRouter");
+const smallAdRouter = require("./routes/smallAdRouter"); // ✅ NEW: Small Ads
 const feedRouter = require("./routes/feedRouter");
 const shortsRouter = require("./routes/shortsRouter");
 const tweetsRouter = require("./routes/tweetsRouter");
@@ -85,6 +86,7 @@ connectDB();
 app.use("/api/ads", adsRouter);
 app.use("/api", movieRouter); // movies (in theatres + trailers)
 app.use("/api/movie-banners", moviePromoBannerRouter);
+app.use("/api/small-ads", smallAdRouter); // ✅ NEW: Small Ads endpoint
 app.use("/api/feeds", feedRouter);
 app.use("/api/shorts", shortsRouter);
 app.use("/api/tweets", tweetsRouter);
