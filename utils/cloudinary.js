@@ -7,4 +7,23 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-module.exports = cloudinary;
+/**
+ * Upload a Buffer to Cloudinary using upload_stream, returns { secure_url, ... }.
+ * @param {Buffer} buffer
+ * @param {string} folder
+ * @param {object} [options]
+ */
+function uploadToCloudinary(buffer, folder = 'custom-news', options = {}) {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder, resource_type: 'image', ...options },
+      (err, result) => (err ? reject(err) : resolve(result))
+    );
+    stream.end(buffer);
+  });
+}
+
+module.exports = {
+  cloudinary,
+  uploadToCloudinary,
+};

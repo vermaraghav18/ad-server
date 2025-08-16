@@ -1,15 +1,21 @@
+// routes/customNewsRouter.js
 const express = require('express');
 const router = express.Router();
-const multer = require('multer')(); // memory storage
-const { uploadToCloudinary } = require('../utils/cloudinary'); // you already have this helper
+const multerLib = require('multer');
+const upload = multerLib({ storage: multerLib.memoryStorage() });
+
+const { uploadToCloudinary } = require('../utils/cloudinary');
 const ctrl = require('../controllers/customNewsController');
 
-// middleware to optionally upload image
+// optional logging + Cloudinary step
 const maybeUpload = async (req, _res, next) => {
   try {
     if (req.file) {
-      const upload = await uploadToCloudinary(req.file.buffer, 'custom-news');
-      req.file.secure_url = upload.secure_url;
+      // Debug: log size & mimetype so we know Multer parsed the file:
+      console.log('[custom-news] file? true size=', req.file.size, 'type=', req.file.mimetype);
+
+      const uploadRes = await uploadToCloudinary(req.file.buffer, 'custom-news');
+      req.file.secure_url = uploadRes.secure_url;
     }
     next();
   } catch (e) { next(e); }
@@ -17,8 +23,8 @@ const maybeUpload = async (req, _res, next) => {
 
 router.get('/', ctrl.list);
 router.get('/:id', ctrl.get);
-router.post('/', multer.single('image'), maybeUpload, ctrl.create);
-router.put('/:id', multer.single('image'), maybeUpload, ctrl.update);
+router.post('/', upload.single('image'), maybeUpload, ctrl.create);
+router.put('/:id', upload.single('image'), maybeUpload, ctrl.update);
 router.delete('/:id', ctrl.remove);
 
 module.exports = router;

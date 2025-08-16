@@ -1,12 +1,24 @@
 const CustomNews = require('../models/customNews');
 
+// controllers/customNewsController.js
 exports.create = async (req, res) => {
   try {
     const { title, description, source } = req.body;
+
     const imageUrl = req.file?.secure_url || req.body.imageUrl;
+    if (!title || !description || !source) {
+      return res.status(400).json({ error: 'title, description, source are required' });
+    }
+    if (!imageUrl) {
+      return res.status(400).json({ error: 'image or imageUrl is required' });
+    }
+
     const item = await CustomNews.create({ title, description, source, imageUrl });
     res.status(201).json(item);
-  } catch (e) { res.status(400).json({ error: e.message }); }
+  } catch (e) {
+    console.error('[custom-news.create] error:', e);
+    res.status(400).json({ error: e.message });
+  }
 };
 
 exports.list = async (_req, res) => {
