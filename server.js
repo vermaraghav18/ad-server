@@ -14,6 +14,7 @@ const feedRouter = require("./routes/feedRouter");
 const shortsRouter = require("./routes/shortsRouter");
 const tweetsRouter = require("./routes/tweetsRouter");
 const customNewsRouter = require('./routes/customNewsRouter');
+const extractRouter = require('./routes/extractRouter');
 
 // DB
 const connectDB = require("./db");
@@ -89,6 +90,7 @@ app.use("/api/feeds", feedRouter);
 app.use("/api/shorts", shortsRouter);
 app.use("/api/tweets", tweetsRouter);
 app.use('/api/custom-news', customNewsRouter);
+app.use('/api/extract', extractRouter);
 /* ------------------------------------------------------ */
 
 // Health checks
