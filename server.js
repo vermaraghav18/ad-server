@@ -15,7 +15,6 @@ const shortsRouter = require("./routes/shortsRouter");
 const tweetsRouter = require("./routes/tweetsRouter");
 const customNewsRouter = require('./routes/customNewsRouter');
 const extractRouter = require('./routes/extractRouter');
-
 // DB
 const connectDB = require("./db");
 
