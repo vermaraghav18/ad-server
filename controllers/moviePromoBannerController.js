@@ -15,6 +15,19 @@ function normalizeVotes(v) {
   return Number.isNaN(n) ? '0' : String(n);
 }
 
+function sanitizeUrl(u) {
+  if (!u || typeof u !== 'string') return '';
+  const s = u.trim();
+  try {
+    // Add https:// if user pasted without scheme
+    const withScheme = /^https?:\/\//i.test(s) ? s : `https://${s}`;
+    const url = new URL(withScheme);
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
 exports.getAll = async (_req, res) => {
   try {
     const banners = await MoviePromoBanner.find({ enabled: true }).sort({ sortIndex: 1 });
@@ -31,11 +44,30 @@ exports.create = async (req, res) => {
       return res.status(400).json({ message: "Poster image is required (field: 'poster')." });
     }
 
-    const { rating, votes, enabled, sortIndex, category } = req.body;
-    const validatedCategory = allowedCategories.includes(category) ? category : 'Trending Now';
+    const {
+      rating,
+      votes,
+      enabled,
+      sortIndex,
+      category,
+      placementIndex, // free-form
+      heading,        // optional heading
+      targetUrl,      // NEW: click-through link
+    } = req.body;
+
+    const validatedCategory =
+      allowedCategories.includes(category) ? category : 'Trending Now';
 
     const ratingNum = Math.max(0, Math.min(10, parseFloat(rating)));
     const votesStr  = normalizeVotes(votes);
+
+    // sanitize placementIndex: integer >= 1
+    let placement = parseInt(String(placementIndex ?? '').trim(), 10);
+    if (!Number.isFinite(placement) || placement < 1) placement = 5;
+
+    // sanitize heading and url
+    const headingText = typeof heading === 'string' ? heading.trim().slice(0, 120) : '';
+    const cleanTargetUrl = sanitizeUrl(targetUrl);
 
     // Upload temp file to Cloudinary
     const upload = await cloudinary.uploader.upload(req.file.path, {
@@ -47,12 +79,15 @@ exports.create = async (req, res) => {
     try { fs.unlinkSync(req.file.path); } catch {}
 
     const newBanner = await MoviePromoBanner.create({
-      posterUrl: upload.secure_url,                    // ✅ persistent Cloudinary URL
+      posterUrl: upload.secure_url,
       rating: Number.isFinite(ratingNum) ? ratingNum : 0,
       votes: votesStr,
       enabled: enabled === 'true' || enabled === true,
       sortIndex: Number.parseInt(sortIndex, 10) || 0,
       category: validatedCategory,
+      placementIndex: placement,
+      heading: headingText,
+      targetUrl: cleanTargetUrl, // ✅ NEW
     });
 
     res.status(201).json(newBanner);
