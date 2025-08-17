@@ -68,9 +68,8 @@ const corsOptions = {
 
 console.log('[CORS] allowlist:', allowlist);
 
-// ✅ Global CORS + explicit preflight
+// ✅ Global CORS (preflight handled automatically for matched routes)
 app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
 
 app.set('trust proxy', 1);
 app.use(express.json({ limit: '2mb' }));
