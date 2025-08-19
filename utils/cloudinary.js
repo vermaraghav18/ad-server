@@ -19,13 +19,14 @@ c.config({
 })();
 
 /**
- * Upload a Buffer to Cloudinary using upload_stream (images by default).
- * Returns the full Cloudinary response (e.g., { secure_url, public_id, ... }).
+ * Upload a Buffer to Cloudinary using upload_stream.
+ * Supports both images and videos (via options.resource_type).
+ * Default folder: "knotshorts/live".
  */
-function uploadBuffer(buffer, folder = 'knotshorts/default', options = {}) {
+function uploadBuffer(buffer, folder = 'knotshorts/live', options = {}) {
   return new Promise((resolve, reject) => {
     const stream = c.uploader.upload_stream(
-      { folder, resource_type: 'image', ...options },
+      { folder, resource_type: options.resource_type || 'image', ...options },
       (err, result) => (err ? reject(err) : resolve(result))
     );
     stream.end(buffer);
@@ -33,17 +34,19 @@ function uploadBuffer(buffer, folder = 'knotshorts/default', options = {}) {
 }
 
 /**
- * Upload a file from disk (path) to Cloudinary (images by default).
+ * Upload a file from disk (path) to Cloudinary.
+ * Supports both images and videos (via options.resource_type).
+ * Default folder: "knotshorts/live".
  */
-function uploadPath(filePath, folder = 'knotshorts/default', options = {}) {
-  return c.uploader.upload(filePath, { folder, resource_type: 'image', ...options });
+function uploadPath(filePath, folder = 'knotshorts/live', options = {}) {
+  return c.uploader.upload(filePath, { folder, resource_type: options.resource_type || 'image', ...options });
 }
 
-// Export the v2 instance as the default AND as a named export so both import styles work.
+// Export the v2 instance as default and named
 module.exports = c;
 module.exports.cloudinary = c;
 
-// Back-compat + helpers
+// Helpers
 module.exports.uploadBuffer = uploadBuffer;
-module.exports.uploadToCloudinary = uploadBuffer; // alias to keep your old name working
+module.exports.uploadToCloudinary = uploadBuffer; // alias for back-compat
 module.exports.uploadPath = uploadPath;

@@ -1,9 +1,9 @@
 // ad-server/controllers/liveController.js
-const path = require('path');
 const LiveTopic = require('../models/liveTopic');
 const LiveEntry = require('../models/liveEntry');
 const LiveBannerConfig = require('../models/liveBannerConfig');
 const sse = require('../sse');
+const { uploadBuffer } = require('../utils/cloudinary');
 
 // ---------- Topics ----------
 exports.createTopic = async (req, res) => {
@@ -60,14 +60,17 @@ exports.deleteTopic = async (req, res) => {
 // ---------- Entries ----------
 exports.createEntry = async (req, res) => {
   try {
-    const { topicId, summary, linkUrl, sourceName, imageUrl, ordinal } = req.body;
+    const { topicId, summary, linkUrl, sourceName, ordinal } = req.body;
     if (!topicId || !summary || !linkUrl)
       return res.status(400).json({ error: 'topicId, summary, linkUrl are required' });
 
-    // ✅ Use uploaded file if available
-    let finalMediaUrl = imageUrl;
+    let imageUrl = req.body.imageUrl || '';
     if (req.file) {
-      finalMediaUrl = `/uploads/live/${req.file.filename}`;
+      // If file uploaded → upload to Cloudinary
+      const result = await uploadBuffer(req.file.buffer, 'knotshorts/live/entries', {
+        resource_type: 'image',
+      });
+      imageUrl = result.secure_url;
     }
 
     const entry = await LiveEntry.create({
@@ -75,9 +78,10 @@ exports.createEntry = async (req, res) => {
       summary,
       linkUrl,
       sourceName,
-      imageUrl: finalMediaUrl,
+      imageUrl,
       ordinal,
     });
+
     sse.broadcast('entry_created', entry);
     res.json(entry);
   } catch (e) {
@@ -101,14 +105,17 @@ exports.updateEntry = async (req, res) => {
     const e = await LiveEntry.findById(req.params.id);
     if (!e) return res.status(404).json({ error: 'not found' });
 
-    const fields = ['topicId', 'summary', 'linkUrl', 'sourceName', 'imageUrl', 'ordinal'];
-    for (const f of fields) {
-      if (req.body[f] !== undefined) e[f] = req.body[f];
-    }
+    const fields = ['topicId', 'summary', 'linkUrl', 'sourceName', 'ordinal'];
+    for (const f of fields) if (req.body[f] !== undefined) e[f] = req.body[f];
 
-    // ✅ Replace media if new file uploaded
     if (req.file) {
-      e.imageUrl = `/uploads/live/${req.file.filename}`;
+      // Replace image with uploaded file
+      const result = await uploadBuffer(req.file.buffer, 'knotshorts/live/entries', {
+        resource_type: 'image',
+      });
+      e.imageUrl = result.secure_url;
+    } else if (req.body.imageUrl !== undefined) {
+      e.imageUrl = req.body.imageUrl;
     }
 
     await e.save();
@@ -134,11 +141,18 @@ exports.getBanner = async (_req, res) => {
 
 exports.updateBanner = async (req, res) => {
   try {
-    const data = req.body || {};
+    const data = { ...req.body };
 
-    // ✅ Allow banner media upload too
     if (req.file) {
-      data.imageUrl = `/uploads/live/${req.file.filename}`;
+      // Auto-detect image vs video
+      const isVideo = req.file.mimetype.startsWith('video/');
+      const result = await uploadBuffer(
+        req.file.buffer,
+        'knotshorts/live/banners',
+        { resource_type: isVideo ? 'video' : 'image' }
+      );
+      data.mediaUrl = result.secure_url;
+      data.mediaType = isVideo ? 'video' : 'image';
     }
 
     const cfg = await LiveBannerConfig.findOneAndUpdate({}, data, {
