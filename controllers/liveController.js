@@ -60,9 +60,10 @@ exports.deleteTopic = async (req, res) => {
 // ---------- Entries ----------
 exports.createEntry = async (req, res) => {
   try {
-    const { topicId, summary, linkUrl, sourceName, ordinal } = req.body;
-    if (!topicId || !summary || !linkUrl)
-      return res.status(400).json({ error: 'topicId, summary, linkUrl are required' });
+    const { topicId, title, summary, linkUrl, sourceName, ordinal } = req.body;
+    if (!topicId || !summary) {
+      return res.status(400).json({ error: 'topicId and summary are required' });
+    }
 
     let imageUrl = req.body.imageUrl || '';
     if (req.file) {
@@ -75,6 +76,7 @@ exports.createEntry = async (req, res) => {
 
     const entry = await LiveEntry.create({
       topicId,
+      title,       // ✅ added title
       summary,
       linkUrl,
       sourceName,
@@ -105,7 +107,7 @@ exports.updateEntry = async (req, res) => {
     const e = await LiveEntry.findById(req.params.id);
     if (!e) return res.status(404).json({ error: 'not found' });
 
-    const fields = ['topicId', 'summary', 'linkUrl', 'sourceName', 'ordinal'];
+    const fields = ['topicId', 'title', 'summary', 'linkUrl', 'sourceName', 'ordinal']; // ✅ title included
     for (const f of fields) if (req.body[f] !== undefined) e[f] = req.body[f];
 
     if (req.file) {

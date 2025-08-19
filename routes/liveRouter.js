@@ -5,7 +5,7 @@ const ctrl = require('../controllers/liveController');
 
 const router = express.Router();
 
-// ✅ Use memory storage (works with Cloudinary uploadBuffer)
+// ✅ Memory storage for Cloudinary
 const upload = multer({ storage: multer.memoryStorage() });
 
 // ── Topics ───────────────────────────────────────────────
@@ -16,6 +16,7 @@ router.patch('/topics/:id', ctrl.updateTopic);
 router.delete('/topics/:id', ctrl.deleteTopic);
 
 // ── Entries (with media upload) ──────────────────────────
+// ✅ title is now required (enforced inside controller)
 router.post('/entries', upload.single('media'), ctrl.createEntry);
 router.get('/entries', ctrl.listEntries);
 router.patch('/entries/:id', upload.single('media'), ctrl.updateEntry);
