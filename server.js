@@ -18,6 +18,7 @@ const customNewsRouter = require('./routes/customNewsRouter');
 const extractRouter = require('./routes/extractRouter');
 const newsHubRouter = require('./routes/newsHubRouter');        // ✅ News Hub
 const liveBannerRouter = require('./routes/liveBannerRouter');
+const bannerWithArticleRouter = require('./routes/bannerWithArticleRouter');
 
 // DB
 const connectDB = require('./db');
@@ -97,6 +98,7 @@ app.use('/api/custom-news', customNewsRouter);
 app.use('/api/extract', extractRouter);
 app.use('/api/news-hub', newsHubRouter);           // ✅ News Hub endpoint
 app.use('/api/live-banners', liveBannerRouter);
+app.use('/api/banners', bannerWithArticleRouter);
 /* ------------------------------------------------------ */
 
 // Health checks
