@@ -1,25 +1,25 @@
-// routes/liveBannerRouter.js
 const express = require('express');
-const router = express.Router();
+const multer = require('multer');
+const upload = multer(); // memory storage
 const ctrl = require('../controllers/liveBannerController');
 
-// Public feed (place BEFORE :id route to avoid conflict)
-router.get('/public', ctrl.publicList);
+const router = express.Router();
 
-// Core CRUD
+// CRUD banner
 router.get('/', ctrl.list);
-router.get('/:id', ctrl.getOne);
 router.post('/', ctrl.create);
-router.put('/:id', ctrl.update);
-router.patch('/:id', ctrl.update); // allow partial updates too
+router.patch('/:id', ctrl.patch);
 router.delete('/:id', ctrl.remove);
 
-// Sections (headings)
+// 👇 NEW: media upload (image/video) for a banner
+router.post('/:id/media', upload.single('media'), ctrl.uploadMedia);
+
+// Sections
 router.post('/:id/sections', ctrl.addSection);
 router.patch('/:id/sections/:sIdx', ctrl.updateSection);
 router.delete('/:id/sections/:sIdx', ctrl.deleteSection);
 
-// Articles within a section
+// Articles inside a section
 router.post('/:id/sections/:sIdx/articles', ctrl.addArticle);
 router.patch('/:id/sections/:sIdx/articles/:aIdx', ctrl.updateArticle);
 router.delete('/:id/sections/:sIdx/articles/:aIdx', ctrl.deleteArticle);
