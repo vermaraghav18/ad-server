@@ -11,16 +11,27 @@ exports.getTopics = async (req, res) => {
     const topics = await LiveTopic.find(filter).sort({ createdAt: -1 });
     res.json(topics);
   } catch (err) {
+    console.error("Error fetching topics:", err);
     res.status(500).json({ error: 'Failed to fetch topics' });
   }
 };
 
 exports.createTopic = async (req, res) => {
   try {
-    const topic = new LiveTopic(req.body);
+    const { title } = req.body;
+    if (!title || !title.trim()) {
+      return res.status(400).json({ error: 'Title is required' });
+    }
+
+    const topic = new LiveTopic({
+      title: title.trim(),
+      isActive: true,  // ✅ make new topics active by default
+    });
+
     const saved = await topic.save();
     res.json(saved);
   } catch (err) {
+    console.error("Error creating topic:", err);
     res.status(500).json({ error: 'Failed to create topic' });
   }
 };
@@ -32,20 +43,35 @@ exports.getEntries = async (req, res) => {
     const entries = await LiveEntry.find({ topicId }).sort({ createdAt: -1 });
     res.json(entries);
   } catch (err) {
+    console.error("Error fetching entries:", err);
     res.status(500).json({ error: 'Failed to fetch entries' });
   }
 };
 
 exports.createEntry = async (req, res) => {
   try {
-    const entry = new LiveEntry(req.body);
+    const { topicId, summary, imageUrl, sourceName, linkUrl } = req.body;
+
+    if (!topicId || !summary) {
+      return res.status(400).json({ error: 'topicId and summary are required' });
+    }
+
+    const entry = new LiveEntry({
+      topicId,
+      summary: summary.trim(),
+      imageUrl: imageUrl || "",
+      sourceName: sourceName || "",
+      linkUrl: linkUrl || "",
+    });
+
     const saved = await entry.save();
 
-    // Broadcast to all SSE clients
+    // ✅ Broadcast new entry to all SSE clients
     sse.broadcast('new-entry', saved);
 
     res.json(saved);
   } catch (err) {
+    console.error("Error creating entry:", err);
     res.status(500).json({ error: 'Failed to create entry' });
   }
 };
