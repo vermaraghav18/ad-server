@@ -17,7 +17,7 @@ const tweetsRouter = require('./routes/tweetsRouter');
 const customNewsRouter = require('./routes/customNewsRouter');
 const extractRouter = require('./routes/extractRouter');
 const newsHubRouter = require('./routes/newsHubRouter');        // ✅ News Hub
-const liveBannerRouter = require('./routes/liveBannerRouter');
+const liveBannerRouter = require('./routes/liveBannerRouter');  // ✅ Live Banner
 const bannerWithArticleRouter = require('./routes/bannerWithArticleRouter');
 
 // DB
@@ -97,8 +97,8 @@ app.use('/api/tweets', tweetsRouter);
 app.use('/api/custom-news', customNewsRouter);
 app.use('/api/extract', extractRouter);
 app.use('/api/news-hub', newsHubRouter);           // ✅ News Hub endpoint
-app.use('/api/live-banners', liveBannerRouter);
-app.use('/api/banners', bannerWithArticleRouter);
+app.use('/api/live-banners', liveBannerRouter);    // ✅ Live Banner endpoint
+app.use('/api/banners', bannerWithArticleRouter);  // ✅ Banner w/ Article
 /* ------------------------------------------------------ */
 
 // Health checks
@@ -118,5 +118,17 @@ app.use((err, _req, res, _next) => {
 
 app.listen(PORT, () => {
   console.log(`✅ Ad Server listening on port ${PORT}`);
-  console.log('➡️  Mounted routes: /api/ads, /api/movie-banners, /api/small-ads, /api/feeds, /api/shorts, /api/tweets, /api/custom-news, /api/extract, /api/news-hub, /api/live');
+  console.log('➡️  Mounted routes:');
+  console.log('   • /api/ads');
+  console.log('   • /api (movies)');
+  console.log('   • /api/movie-banners');
+  console.log('   • /api/small-ads');
+  console.log('   • /api/feeds');
+  console.log('   • /api/shorts');
+  console.log('   • /api/tweets');
+  console.log('   • /api/custom-news');
+  console.log('   • /api/extract');
+  console.log('   • /api/news-hub');
+  console.log('   • /api/live-banners');   // <-- corrected
+  console.log('   • /api/banners');
 });
