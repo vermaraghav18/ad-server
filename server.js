@@ -17,8 +17,6 @@ const tweetsRouter = require('./routes/tweetsRouter');
 const customNewsRouter = require('./routes/customNewsRouter');
 const extractRouter = require('./routes/extractRouter');
 const newsHubRouter = require('./routes/newsHubRouter');        // ✅ News Hub
-const liveRouter = require('./routes/liveRouter');              // ✅ Live Updates
-const sse = require('./sse');                                   // ✅ SSE for Live Updates
 
 // DB
 const connectDB = require('./db');
@@ -97,8 +95,6 @@ app.use('/api/tweets', tweetsRouter);
 app.use('/api/custom-news', customNewsRouter);
 app.use('/api/extract', extractRouter);
 app.use('/api/news-hub', newsHubRouter);           // ✅ News Hub endpoint
-app.use('/api/live', liveRouter);                  // ✅ Live Updates endpoint
-app.get('/api/live/stream', sse.eventsHandler);    // ✅ SSE endpoint
 /* ------------------------------------------------------ */
 
 // Health checks
