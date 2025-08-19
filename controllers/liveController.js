@@ -1,4 +1,5 @@
 // ad-server/controllers/liveController.js
+const path = require('path');
 const LiveTopic = require('../models/liveTopic');
 const LiveEntry = require('../models/liveEntry');
 const LiveBannerConfig = require('../models/liveBannerConfig');
@@ -63,7 +64,20 @@ exports.createEntry = async (req, res) => {
     if (!topicId || !summary || !linkUrl)
       return res.status(400).json({ error: 'topicId, summary, linkUrl are required' });
 
-    const entry = await LiveEntry.create({ topicId, summary, linkUrl, sourceName, imageUrl, ordinal });
+    // ✅ Use uploaded file if available
+    let finalMediaUrl = imageUrl;
+    if (req.file) {
+      finalMediaUrl = `/uploads/live/${req.file.filename}`;
+    }
+
+    const entry = await LiveEntry.create({
+      topicId,
+      summary,
+      linkUrl,
+      sourceName,
+      imageUrl: finalMediaUrl,
+      ordinal,
+    });
     sse.broadcast('entry_created', entry);
     res.json(entry);
   } catch (e) {
@@ -76,7 +90,8 @@ exports.listEntries = async (req, res) => {
   const q = topicId ? { topicId } : {};
   const items = await LiveEntry.find(q)
     .sort({ ordinal: 1, createdAt: -1 })
-    .skip(Number(offset)).limit(Math.min(Number(limit), 100))
+    .skip(Number(offset))
+    .limit(Math.min(Number(limit), 100))
     .lean();
   res.json(items);
 };
@@ -87,7 +102,14 @@ exports.updateEntry = async (req, res) => {
     if (!e) return res.status(404).json({ error: 'not found' });
 
     const fields = ['topicId', 'summary', 'linkUrl', 'sourceName', 'imageUrl', 'ordinal'];
-    for (const f of fields) if (req.body[f] !== undefined) e[f] = req.body[f];
+    for (const f of fields) {
+      if (req.body[f] !== undefined) e[f] = req.body[f];
+    }
+
+    // ✅ Replace media if new file uploaded
+    if (req.file) {
+      e.imageUrl = `/uploads/live/${req.file.filename}`;
+    }
 
     await e.save();
     sse.broadcast('entry_updated', e);
@@ -113,6 +135,12 @@ exports.getBanner = async (_req, res) => {
 exports.updateBanner = async (req, res) => {
   try {
     const data = req.body || {};
+
+    // ✅ Allow banner media upload too
+    if (req.file) {
+      data.imageUrl = `/uploads/live/${req.file.filename}`;
+    }
+
     const cfg = await LiveBannerConfig.findOneAndUpdate({}, data, {
       new: true,
       upsert: true,
