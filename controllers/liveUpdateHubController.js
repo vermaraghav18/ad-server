@@ -137,6 +137,7 @@ exports.createEntry = async (req, res) => {
     const sortIndex = toInt(req.body.sortIndex, 0);
     const enabled = toBool(req.body.enabled, true);
     const targetUrl = (req.body.targetUrl || '').trim();
+    const source = (req.body.source || '').trim(); // ⬅️ NEW
 
     if (!sectionId) return res.status(400).json({ error: 'Section id is required' });
     if (!title || !description) {
@@ -157,6 +158,7 @@ exports.createEntry = async (req, res) => {
       targetUrl,
       sortIndex,
       enabled,
+      source, // ⬅️ NEW
     });
 
     res.status(201).json(doc);
@@ -179,6 +181,7 @@ exports.updateEntry = async (req, res) => {
     if (req.body.title !== undefined) updates.title = String(req.body.title).trim();
     if (req.body.description !== undefined) updates.description = String(req.body.description).trim();
     if (req.body.targetUrl !== undefined) updates.targetUrl = String(req.body.targetUrl).trim();
+    if (req.body.source !== undefined) updates.source = String(req.body.source).trim(); // ⬅️ NEW
 
     const sortIndex = toInt(req.body.sortIndex);
     if (sortIndex !== undefined) updates.sortIndex = sortIndex;
