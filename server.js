@@ -20,6 +20,7 @@ const newsHubRouter = require('./routes/newsHubRouter');        // ✅ News Hub
 const liveBannerRouter = require('./routes/liveBannerRouter');  // ✅ Live Banner
 const bannerWithArticleRouter = require('./routes/bannerWithArticleRouter');
 const uploadRouter = require('./routes/uploadRouter');
+const liveUpdateHubRouter = require('./routes/liveUpdateHubRouter');
 
 // DB
 const connectDB = require('./db');
@@ -101,6 +102,7 @@ app.use('/api/news-hub', newsHubRouter);           // ✅ News Hub endpoint
 app.use('/api/live-banners', liveBannerRouter);    // ✅ Live Banner endpoint
 app.use('/api/banners', bannerWithArticleRouter);  // ✅ Banner w/ Article
 app.use('/api/upload', uploadRouter);
+app.use('/api/live-update-hub', liveUpdateHubRouter);
 /* ------------------------------------------------------ */
 
 // Health checks
@@ -133,4 +135,6 @@ app.listen(PORT, () => {
   console.log('   • /api/news-hub');
   console.log('   • /api/live-banners');   // <-- corrected
   console.log('   • /api/banners');
+  console.log('   • /api/live-update-hub');
+
 });
