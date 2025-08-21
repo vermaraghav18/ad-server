@@ -6,6 +6,10 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 
+// Perf middlewares (LOAD BEFORE ROUTERS)
+const compression = require('compression');
+const apicache = require('apicache');
+
 // Routers
 const adsRouter = require('./routes/adsRouter');
 const movieRouter = require('./routes/movieRouter');
@@ -21,6 +25,7 @@ const liveBannerRouter = require('./routes/liveBannerRouter');  // ✅ Live Bann
 const bannerWithArticleRouter = require('./routes/bannerWithArticleRouter');
 const uploadRouter = require('./routes/uploadRouter');
 const liveUpdateHubRouter = require('./routes/liveUpdateHubRouter');
+const rssAggRouter = require('./routes/rssAggRouter');          // ✅ RSS aggregator
 
 // DB
 const connectDB = require('./db');
@@ -72,7 +77,7 @@ const corsOptions = {
 
 console.log('[CORS] allowlist:', allowlist);
 
-// ✅ Global CORS (preflight handled automatically for matched routes)
+// ✅ Global CORS
 app.use(cors(corsOptions));
 
 app.set('trust proxy', 1);
@@ -85,24 +90,30 @@ fs.mkdirSync(promoDir, { recursive: true });
 app.use('/uploads', express.static(baseUploadDir));
 /* -------------------------------------------------------- */
 
+// ✅ Perf middlewares should be BEFORE route mounts
+app.use(compression({ level: 6 }));
+const cache = apicache.options({ respectCacheControl: true }).middleware;
+
 // Connect DB
 connectDB();
 
 /* ----------------------- Routes ------------------------ */
+// Wrap hot endpoints with cache in the SAME mount call
 app.use('/api/ads', adsRouter);
 app.use('/api', movieRouter); // movies (in theatres + trailers)
 app.use('/api/movie-banners', moviePromoBannerRouter);
 app.use('/api/small-ads', smallAdRouter);          // ✅ Small Ads endpoint
-app.use('/api/feeds', feedRouter);
+app.use('/api/feeds', cache('30 seconds'), feedRouter);
 app.use('/api/shorts', shortsRouter);
 app.use('/api/tweets', tweetsRouter);
-app.use('/api/custom-news', customNewsRouter);
+app.use('/api/custom-news', cache('20 seconds'), customNewsRouter);
 app.use('/api/extract', extractRouter);
 app.use('/api/news-hub', newsHubRouter);           // ✅ News Hub endpoint
 app.use('/api/live-banners', liveBannerRouter);    // ✅ Live Banner endpoint
 app.use('/api/banners', bannerWithArticleRouter);  // ✅ Banner w/ Article
 app.use('/api/upload', uploadRouter);
 app.use('/api/live-update-hub', liveUpdateHubRouter);
+app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 /* ------------------------------------------------------ */
 
 // Health checks
@@ -127,14 +138,14 @@ app.listen(PORT, () => {
   console.log('   • /api (movies)');
   console.log('   • /api/movie-banners');
   console.log('   • /api/small-ads');
-  console.log('   • /api/feeds');
+  console.log('   • /api/feeds  (cached 30s)');
   console.log('   • /api/shorts');
   console.log('   • /api/tweets');
-  console.log('   • /api/custom-news');
+  console.log('   • /api/custom-news  (cached 20s)');
   console.log('   • /api/extract');
   console.log('   • /api/news-hub');
-  console.log('   • /api/live-banners');   // <-- corrected
+  console.log('   • /api/live-banners');
   console.log('   • /api/banners');
   console.log('   • /api/live-update-hub');
-
+  console.log('   • /api/rss-agg  (cached 30s)');
 });
