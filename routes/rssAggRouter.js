@@ -16,64 +16,57 @@ const parser = new RSSParser({
 // ------------ config (env tunables) ------------------
 const REFRESH_MS = Number(process.env.RSS_AGG_REFRESH_MS || 180000); // 3 min
 const PER_FEED_LIMIT = Number(process.env.RSS_AGG_PER_FEED_LIMIT || 30);
-const MAX_FEEDS       = Number(process.env.RSS_AGG_MAX_FEEDS || 50);
+const MAX_FEEDS       = Number(process.env.RSS_AGG_MAX_FEEDS || 200);
 const CONCURRENCY     = Number(process.env.RSS_AGG_CONCURRENCY || 8);
 
-// Where to call our own /api/feeds. Prefer explicit SELF_BASE_URL.
-const SELF_BASE =
-  process.env.SELF_BASE_URL ||
-  `http://localhost:${process.env.PORT || 5000}`;
+// NEW: try older pages for WordPress-like feeds to pull more than 10–20
+const EXTRA_PAGES     = Number(process.env.RSS_AGG_EXTRA_PAGES || 3); // fetch paged=2..N
+// NEW: dedupe strategy
+const DEDUPE_BY       = (process.env.RSS_AGG_DEDUPE_BY || 'link').toLowerCase(); // 'link' | 'link_or_title'
 
-// Warm categories at boot (comma-separated). Example: "Top News,Tamil Nadu"
+// Where to call our own /api/feeds. Prefer explicit SELF_BASE_URL.
+const SELF_BASE = process.env.SELF_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
+
+// Warm categories at boot (comma-separated).
 const WARM_CATS = (process.env.RSS_AGG_WARM_CATEGORIES || '')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
 
 // ------------- in-memory cache -----------------------
-/**
- * cache = {
- *   "<categoryKey>": { items: [...], updatedAt: 123456789, refreshing: false }
- * }
- */
 const cache = Object.create(null);
 
-// ------------- helpers -------------------------------
 function now() { return Date.now(); }
-
 function keyFor(category) {
   return (category || '').trim().toLowerCase() || '__all__';
 }
 
-function dedupeByLink(items) {
-  const seen = new Set();
+// ---------- helpers ----------
+function dedupe(items) {
   const out = [];
+  const seen = new Set();
   for (const a of items) {
-    const k = (a.link && a.link.trim()) || (a.title && a.title.trim());
-    if (!k) continue;
-    if (!seen.has(k)) {
-      seen.add(k);
-      out.push(a);
-    }
+    const link = (a.link || '').trim();
+    const title = (a.title || '').trim();
+    const key = DEDUPE_BY === 'link' ? link : (link || title);
+    if (!key) { out.push(a); continue; } // keep if no key
+    if (!seen.has(key)) { seen.add(key); out.push(a); }
   }
   return out;
 }
 
 function pickImage(entry) {
-  // try enclosure, media:content, media:thumbnail, or <img> in content:encoded
   if (entry.enclosure && entry.enclosure.url) return entry.enclosure.url;
-  if (entry.media && Array.isArray(entry.media.content) && entry.media.content.length) {
+  if (entry.media && Array.isArray(entry.media.content)) {
     const m = entry.media.content.find((c) => c.url);
     if (m && m.url) return m.url;
   }
-  if (entry.media && Array.isArray(entry.media.thumbnail) && entry.media.thumbnail.length) {
+  if (entry.media && Array.isArray(entry.media.thumbnail)) {
     const t = entry.media.thumbnail.find((t) => t.url);
     if (t && t.url) return t.url;
   }
   const html = entry['content:encoded'] || entry.content || entry.summary || '';
-  const m = typeof html === 'string'
-    ? html.match(/<img[^>]+src=["']([^"']+)["']/i)
-    : null;
+  const m = typeof html === 'string' ? html.match(/<img[^>]+src=["']([^"']+)["']/i) : null;
   return m ? m[1] : '';
 }
 
@@ -82,7 +75,6 @@ function toArticle(entry, feedTitle, feedUrl) {
   const title = (entry.title || '').trim();
   const desc = (entry.contentSnippet || entry.summary || entry.content || '').toString().trim();
 
-  // pubDate: rss-parser gives isoDate or pubDate
   let publishedAt = null;
   if (entry.isoDate) {
     const d = new Date(entry.isoDate);
@@ -94,7 +86,6 @@ function toArticle(entry, feedTitle, feedUrl) {
 
   const imageUrl = pickImage(entry);
 
-  // shape matches your Flutter Article.fromJson mapper expectations
   return {
     id: link || title || feedUrl,
     title,
@@ -107,15 +98,13 @@ function toArticle(entry, feedTitle, feedUrl) {
     author: entry.creator || entry.author || '',
     publishedAt,
     parsedDate: publishedAt,
-    // legacy-friendly:
     pubDate: publishedAt ? publishedAt.split('T')[0] : '',
     pubTime: publishedAt ? (publishedAt.split('T')[1] || '').split('.')[0] : '',
   };
 }
 
 async function getFeedUrls(category) {
-  // Ask our own /api/feeds (works with your existing router)
-  const params = new URLSearchParams({ page: '1', pageSize: '200' });
+  const params = new URLSearchParams({ page: '1', pageSize: '500' });
   if (category && category.trim()) params.set('category', category.trim());
   const url = `${SELF_BASE}/api/feeds?${params.toString()}`;
 
@@ -128,22 +117,40 @@ async function getFeedUrls(category) {
     const u = (row.url || '').toString();
     const label = (row.label || '').toString();
     const match =
-      !category ||
-      !category.trim() ||
+      !category || !category.trim() ||
       row.category === category ||
       label === category;
 
-    if (enabled && u) urls.push(u);
+    // ✅ actually filter by category (previous version forgot to use `match`)
+    if (enabled && u && match) urls.push(u);
   }
-  // Trim to MAX_FEEDS (safety)
   return urls.slice(0, MAX_FEEDS);
 }
 
-async function fetchOneFeed(u, perFeedLimit) {
+function isWordPressLike(u) {
+  return /\/feed(\b|\/)|feed=rss/i.test(u) || /wordpress/i.test(u);
+}
+
+function makePagedVariants(u, maxPage) {
+  // WP typically supports: /feed/?paged=2  or ?paged=2
+  const out = [];
+  for (let p = 2; p <= maxPage; p++) {
+    if (/\?/.test(u)) {
+      out.push(`${u}&paged=${p}`);
+    } else if (/\/feed\/?$/.test(u)) {
+      out.push(u.replace(/\/?$/, '/?paged=' + p));
+    } else {
+      out.push(`${u}?paged=${p}`);
+    }
+  }
+  return out;
+}
+
+async function fetchSingle(u) {
   try {
     const feed = await parser.parseURL(u);
     const title = feed.title || '';
-    const items = (feed.items || []).slice(0, perFeedLimit).map((it) => toArticle(it, title, u));
+    const items = (feed.items || []).map((it) => toArticle(it, title, u));
     return items;
   } catch (e) {
     console.error('[rss-agg] feed fail:', u, e.message || e);
@@ -151,14 +158,30 @@ async function fetchOneFeed(u, perFeedLimit) {
   }
 }
 
+async function fetchOneFeedAll(u, perFeedLimit) {
+  // First page
+  let items = await fetchSingle(u);
+
+  // Extra pages (older posts) for WordPress-like feeds
+  if (EXTRA_PAGES > 0 && isWordPressLike(u)) {
+    const variants = makePagedVariants(u, EXTRA_PAGES + 1); // adds paged=2..N
+    for (const v of variants) {
+      const more = await fetchSingle(v);
+      items.push(...more);
+    }
+  }
+
+  // Trim per-feed
+  return items.slice(0, perFeedLimit);
+}
+
 async function fetchAllFeeds(urls, perFeedLimit) {
   const out = [];
-  // simple concurrency control
   let i = 0;
   async function next() {
     if (i >= urls.length) return;
     const u = urls[i++];
-    const items = await fetchOneFeed(u, perFeedLimit);
+    const items = await fetchOneFeedAll(u, perFeedLimit);
     out.push(...items);
     return next();
   }
@@ -177,19 +200,17 @@ async function rebuildCategory(category) {
     const urls = await getFeedUrls(category);
     const items = await fetchAllFeeds(urls, PER_FEED_LIMIT);
 
-    // sort newest first
     items.sort((a, b) => {
       const da = a.publishedAt ? Date.parse(a.publishedAt) : 0;
       const db = b.publishedAt ? Date.parse(b.publishedAt) : 0;
       return db - da;
     });
 
-    cache[k].items = dedupeByLink(items);
+    cache[k].items = dedupe(items);
     cache[k].updatedAt = now();
     return cache[k];
   } finally {
     cache[k].refreshing = false;
-    // schedule next refresh
     setTimeout(() => {
       rebuildCategory(category).catch((e) =>
         console.error('[rss-agg] refresh error:', category, e.message || e)
@@ -200,16 +221,11 @@ async function rebuildCategory(category) {
 
 // ------------- routes -------------------------------
 
-/**
- * GET /api/rss-agg
- * Query: category, page=1, pageSize=20
- * Optional: perFeedLimit (overrides env), maxFeeds (overrides env)
- */
 router.get('/', async (req, res) => {
   try {
     const category = (req.query.category || '').toString();
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
-    const pageSize = Math.max(1, Math.min(1000, parseInt(req.query.pageSize || '20', 10)));
+    const pageSize = Math.max(1, Math.min(2000, parseInt(req.query.pageSize || '20', 10)));
 
     // allow per-request overrides (optional)
     if (req.query.perFeedLimit) {
@@ -222,7 +238,6 @@ router.get('/', async (req, res) => {
     const k = keyFor(category);
     const entry = cache[k];
 
-    // If no cache yet or stale, kick off rebuild (but serve stale/empty immediately)
     const STALE = !entry || now() - (entry.updatedAt || 0) > REFRESH_MS * 1.2;
     if (STALE) {
       rebuildCategory(category).catch((e) =>
@@ -234,7 +249,6 @@ router.get('/', async (req, res) => {
     const start = (page - 1) * pageSize;
     const slice = items.slice(start, start + pageSize);
 
-    // Respond in a shape your Flutter already understands
     res.json({
       items: slice,
       total: items.length,
