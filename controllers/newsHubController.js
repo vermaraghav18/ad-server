@@ -13,10 +13,18 @@ function toInt(v, def = 0) {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : def;
 }
+// Ensure http/https scheme; tolerate blanks
+function ensureHttp(u) {
+  if (!u) return '';
+  const s = String(u).trim();
+  if (!s) return '';
+  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
+}
 
 /** GET /api/news-hub
  * Returns enabled sections (sorted by placementIndex, sortIndex)
- * with enabled entries (sorted by sortIndex)
+ * with enabled entries (sorted by sortIndex, createdAt)
+ * Normalizes each entry's targetUrl (accepts aliases).
  */
 exports.getHub = async (_req, res) => {
   try {
@@ -32,10 +40,14 @@ exports.getHub = async (_req, res) => {
       .sort({ sortIndex: 1, createdAt: 1 })
       .lean();
 
+    // Group entries by section and normalize URL
     const bySection = new Map();
     for (const e of entries) {
       const k = String(e.sectionId);
       if (!bySection.has(k)) bySection.set(k, []);
+      // normalize + map aliases into targetUrl
+      const normalized = ensureHttp(e.targetUrl || e.url || e.link || e.href || '');
+      e.targetUrl = normalized; // keep field name consistent for clients
       bySection.get(k).push(e);
     }
 
@@ -47,7 +59,9 @@ exports.getHub = async (_req, res) => {
     res.json(result);
   } catch (err) {
     console.error('❌ NewsHub getHub error:', err);
-    res.status(500).json({ message: 'Failed to load News Hub', error: String(err?.message || err) });
+    res
+      .status(500)
+      .json({ message: 'Failed to load News Hub', error: String(err?.message || err) });
   }
 };
 
@@ -68,7 +82,9 @@ exports.createSection = async (req, res) => {
     res.status(201).json(doc);
   } catch (err) {
     console.error('❌ NewsHub createSection error:', err);
-    res.status(400).json({ message: 'Failed to create section', error: String(err?.message || err) });
+    res
+      .status(400)
+      .json({ message: 'Failed to create section', error: String(err?.message || err) });
   }
 };
 
@@ -78,7 +94,8 @@ exports.updateSection = async (req, res) => {
     const updates = {};
     if (req.body.name != null) updates.name = String(req.body.name).trim();
     if (req.body.heading != null) updates.heading = String(req.body.heading).trim();
-    if (req.body.placementIndex != null) updates.placementIndex = Math.max(1, toInt(req.body.placementIndex, 1));
+    if (req.body.placementIndex != null)
+      updates.placementIndex = Math.max(1, toInt(req.body.placementIndex, 1));
     if (req.body.sortIndex != null) updates.sortIndex = toInt(req.body.sortIndex, 0);
     if (req.body.enabled != null) updates.enabled = toBool(req.body.enabled);
 
@@ -87,7 +104,9 @@ exports.updateSection = async (req, res) => {
     res.json(doc);
   } catch (err) {
     console.error('❌ NewsHub updateSection error:', err);
-    res.status(400).json({ message: 'Failed to update section', error: String(err?.message || err) });
+    res
+      .status(400)
+      .json({ message: 'Failed to update section', error: String(err?.message || err) });
   }
 };
 
@@ -100,7 +119,9 @@ exports.deleteSection = async (req, res) => {
     res.sendStatus(204);
   } catch (err) {
     console.error('❌ NewsHub deleteSection error:', err);
-    res.status(400).json({ message: 'Failed to delete section', error: String(err?.message || err) });
+    res
+      .status(400)
+      .json({ message: 'Failed to delete section', error: String(err?.message || err) });
   }
 };
 
@@ -120,9 +141,15 @@ exports.createEntry = async (req, res) => {
       return res.status(400).json({ message: 'Only image uploads are supported for News Hub entries.' });
     }
 
-    const { title, description, targetUrl, sortIndex, enabled } = req.body;
+    const { title, description, targetUrl, url, link, sortIndex, enabled } = req.body;
     if (!title || !description) {
       return res.status(400).json({ message: 'title and description are required' });
+    }
+
+    // Normalize and require a valid URL (accept aliases)
+    const normalizedUrl = ensureHttp(targetUrl || url || link || '');
+    if (!normalizedUrl) {
+      return res.status(400).json({ message: 'targetUrl is required and must be a valid URL' });
     }
 
     // Upload to Cloudinary
@@ -132,14 +159,16 @@ exports.createEntry = async (req, res) => {
     });
 
     // best-effort cleanup
-    try { fs.unlinkSync(req.file.path); } catch {}
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch {}
 
     const entry = await NewsHubEntry.create({
       sectionId,
       imageUrl: upload.secure_url,
       title: String(title).trim(),
       description: String(description).trim(),
-      targetUrl: String(targetUrl ?? '').trim(),
+      targetUrl: normalizedUrl,
       sortIndex: toInt(sortIndex, 0),
       enabled: toBool(enabled ?? true),
     });
@@ -147,7 +176,9 @@ exports.createEntry = async (req, res) => {
     res.status(201).json(entry);
   } catch (err) {
     console.error('❌ NewsHub createEntry error:', err);
-    res.status(400).json({ message: 'Failed to create entry', error: String(err?.message || err) });
+    res
+      .status(400)
+      .json({ message: 'Failed to create entry', error: String(err?.message || err) });
   }
 };
 
@@ -157,7 +188,15 @@ exports.updateEntry = async (req, res) => {
     const updates = {};
     if (req.body.title != null) updates.title = String(req.body.title).trim();
     if (req.body.description != null) updates.description = String(req.body.description).trim();
-    if (req.body.targetUrl != null) updates.targetUrl = String(req.body.targetUrl).trim();
+
+    if (req.body.targetUrl != null || req.body.url != null || req.body.link != null) {
+      const normalized = ensureHttp(req.body.targetUrl || req.body.url || req.body.link || '');
+      if (!normalized) {
+        return res.status(400).json({ message: 'targetUrl must be a valid URL' });
+      }
+      updates.targetUrl = normalized;
+    }
+
     if (req.body.sortIndex != null) updates.sortIndex = toInt(req.body.sortIndex, 0);
     if (req.body.enabled != null) updates.enabled = toBool(req.body.enabled);
 
@@ -166,7 +205,9 @@ exports.updateEntry = async (req, res) => {
     res.json(doc);
   } catch (err) {
     console.error('❌ NewsHub updateEntry error:', err);
-    res.status(400).json({ message: 'Failed to update entry', error: String(err?.message || err) });
+    res
+      .status(400)
+      .json({ message: 'Failed to update entry', error: String(err?.message || err) });
   }
 };
 
@@ -177,6 +218,8 @@ exports.deleteEntry = async (req, res) => {
     res.sendStatus(204);
   } catch (err) {
     console.error('❌ NewsHub deleteEntry error:', err);
-    res.status(400).json({ message: 'Failed to delete entry', error: String(err?.message || err) });
+    res
+      .status(400)
+      .json({ message: 'Failed to delete entry', error: String(err?.message || err) });
   }
 };
