@@ -3,7 +3,7 @@ const mongoose = require('mongoose');
 
 const LiveBannerConfigSchema = new mongoose.Schema(
   {
-    headline: { type: String, default: 'Live Updates', trim: true, maxlength: 120 },
+    headline: { type: String, default: 'More Updates For You', trim: true, maxlength: 100 },
     mediaType: { type: String, enum: ['image', 'video'], default: 'image' },
     mediaUrl: { type: String, default: '' },
     insertAfterNthCard: { type: Number, default: 5, min: 0 },

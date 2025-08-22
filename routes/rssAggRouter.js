@@ -14,14 +14,14 @@ const parser = new RSSParser({
 });
 
 // ------------ config (env tunables) ------------------
-const REFRESH_MS = Number(process.env.RSS_AGG_REFRESH_MS || 180000); // 3 min
-const PER_FEED_LIMIT = Number(process.env.RSS_AGG_PER_FEED_LIMIT || 30);
+const REFRESH_MS      = Number(process.env.RSS_AGG_REFRESH_MS || 120000); // 3 min
+const PER_FEED_LIMIT  = Number(process.env.RSS_AGG_PER_FEED_LIMIT || 50);
 const MAX_FEEDS       = Number(process.env.RSS_AGG_MAX_FEEDS || 200);
-const CONCURRENCY     = Number(process.env.RSS_AGG_CONCURRENCY || 8);
+const CONCURRENCY     = Number(process.env.RSS_AGG_CONCURRENCY || 10);
 
-// NEW: try older pages for WordPress-like feeds to pull more than 10–20
+// Try older pages for WordPress-like feeds to pull more than 10–20
 const EXTRA_PAGES     = Number(process.env.RSS_AGG_EXTRA_PAGES || 3); // fetch paged=2..N
-// NEW: dedupe strategy
+// Dedupe strategy
 const DEDUPE_BY       = (process.env.RSS_AGG_DEDUPE_BY || 'link').toLowerCase(); // 'link' | 'link_or_title'
 
 // Where to call our own /api/feeds. Prefer explicit SELF_BASE_URL.
@@ -103,27 +103,40 @@ function toArticle(entry, feedTitle, feedUrl) {
   };
 }
 
+// IMPORTANT: match by category/label/name/city/state
 async function getFeedUrls(category) {
+  // Fetch all feeds and filter locally so we can match on city/state too.
   const params = new URLSearchParams({ page: '1', pageSize: '500' });
-  if (category && category.trim()) params.set('category', category.trim());
   const url = `${SELF_BASE}/api/feeds?${params.toString()}`;
 
   const { data } = await axios.get(url, { timeout: 15000 });
   if (!Array.isArray(data)) return [];
 
+  const needle = (category || '').trim().toLowerCase();
+
   const urls = [];
   for (const row of data) {
     const enabled = row.enabled === undefined ? true : !!row.enabled;
-    const u = (row.url || '').toString();
-    const label = (row.label || '').toString();
-    const match =
-      !category || !category.trim() ||
-      row.category === category ||
-      label === category;
+    if (!enabled) continue;
 
-    // ✅ actually filter by category (previous version forgot to use `match`)
-    if (enabled && u && match) urls.push(u);
+    const u = (row.url || '').toString().trim();
+    if (!u) continue;
+
+    // fields considered for matching the requested "category"
+    const fields = [
+      row.category,  // e.g. "Finance"
+      row.label,     // e.g. "Ahmedabad"
+      row.name,      // sometimes used
+      row.city,      // e.g. "Bengaluru"
+      row.state,     // e.g. "Karnataka"
+    ]
+      .map(v => String(v || '').trim().toLowerCase())
+      .filter(Boolean);
+
+    const match = !needle || fields.includes(needle);
+    if (match) urls.push(u);
   }
+
   return urls.slice(0, MAX_FEEDS);
 }
 
@@ -220,7 +233,6 @@ async function rebuildCategory(category) {
 }
 
 // ------------- routes -------------------------------
-
 router.get('/', async (req, res) => {
   try {
     const category = (req.query.category || '').toString();
