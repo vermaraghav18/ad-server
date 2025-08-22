@@ -1,4 +1,9 @@
 // server.js
+// --- Force IPv4 first to avoid ENETUNREACH on IPv6-only lookups ---
+const dns = require('node:dns');
+dns.setDefaultResultOrder('ipv4first'); // or set NODE_OPTIONS="--dns-result-order=ipv4first"
+// ------------------------------------------------------------------
+
 require('dotenv').config(); // load env first
 
 const express = require('express');
@@ -26,6 +31,9 @@ const bannerWithArticleRouter = require('./routes/bannerWithArticleRouter');
 const uploadRouter = require('./routes/uploadRouter');
 const liveUpdateHubRouter = require('./routes/liveUpdateHubRouter');
 const rssAggRouter = require('./routes/rssAggRouter');          // ✅ RSS aggregator
+
+// Optional: tiny outbound tester using the hardened client
+const { get: outboundGet } = require('./request');
 
 // DB
 const connectDB = require('./db');
@@ -114,7 +122,26 @@ app.use('/api/banners', bannerWithArticleRouter);  // ✅ Banner w/ Article
 app.use('/api/upload', uploadRouter);
 app.use('/api/live-update-hub', liveUpdateHubRouter);
 app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
-/* ------------------------------------------------------ */
+
+/* -------- Optional probe for outbound debugging ---------- */
+app.get('/api/_probe', async (req, res) => {
+  const url = req.query.url || 'https://example.com/';
+  try {
+    const r = await outboundGet(url, { responseType: 'text' });
+    const len =
+      typeof r.data === 'string'
+        ? r.data.length
+        : Buffer.isBuffer(r.data)
+        ? r.data.length
+        : 0;
+    res.status(200).json({ url, status: r.status, length: len });
+  } catch (e) {
+    res
+      .status(502)
+      .json({ url, error: e.code || 'UNKNOWN', message: e.message || String(e) });
+  }
+});
+/* -------------------------------------------------------- */
 
 // Health checks
 app.get('/', (_req, res) => res.send('✅ Ad Server Running'));
@@ -148,4 +175,5 @@ app.listen(PORT, () => {
   console.log('   • /api/banners');
   console.log('   • /api/live-update-hub');
   console.log('   • /api/rss-agg  (cached 30s)');
+  console.log('   • /api/_probe  (optional outbound tester)');
 });
