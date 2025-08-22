@@ -9,10 +9,12 @@ function toBool(v) {
   const s = String(v ?? '').toLowerCase().trim();
   return s === '1' || s === 'true' || s === 'yes';
 }
+
 function toInt(v, def = 0) {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? n : def;
 }
+
 // Ensure http/https scheme; tolerate blanks
 function ensureHttp(u) {
   if (!u) return '';
@@ -21,10 +23,12 @@ function ensureHttp(u) {
   return /^https?:\/\//i.test(s) ? s : `https://${s}`;
 }
 
-/** GET /api/news-hub
- * Returns enabled sections (sorted by placementIndex, sortIndex)
- * with enabled entries (sorted by sortIndex, createdAt)
- * Normalizes each entry's targetUrl (accepts aliases).
+/**
+ * GET /api/news-hub
+ * - Returns enabled sections (sorted by placementIndex, sortIndex)
+ * - with enabled entries (sorted by sortIndex, createdAt)
+ * - Normalizes each entry's link into `targetUrl` (accepts aliases, incl. legacy `targeturl`)
+ * - Skips entries that still have no usable link
  */
 exports.getHub = async (_req, res) => {
   try {
@@ -33,6 +37,7 @@ exports.getHub = async (_req, res) => {
       .lean();
 
     const ids = sections.map((s) => s._id);
+
     const entries = await NewsHubEntry.find({
       sectionId: { $in: ids },
       enabled: true,
@@ -40,14 +45,23 @@ exports.getHub = async (_req, res) => {
       .sort({ sortIndex: 1, createdAt: 1 })
       .lean();
 
-    // Group entries by section and normalize URL
     const bySection = new Map();
+
     for (const e of entries) {
       const k = String(e.sectionId);
       if (!bySection.has(k)) bySection.set(k, []);
-      // normalize + map aliases into targetUrl
-      const normalized = ensureHttp(e.targetUrl || e.url || e.link || e.href || '');
-      e.targetUrl = normalized; // keep field name consistent for clients
+
+      // normalize + accept legacy/alias keys
+      const normalized = ensureHttp(
+        e.targetUrl || e.targeturl || e.url || e.link || e.href || ''
+      );
+
+      // Skip entries with no valid link
+      if (!normalized) continue;
+
+      e.targetUrl = normalized; // canonical key for clients
+      delete e.targeturl;       // remove legacy to avoid confusion
+
       bySection.get(k).push(e);
     }
 
@@ -125,7 +139,11 @@ exports.deleteSection = async (req, res) => {
   }
 };
 
-/** POST /api/news-hub/sections/:id/entries  (multipart: media, fields) */
+/**
+ * POST /api/news-hub/sections/:id/entries (multipart)
+ * - fields: title, description, targetUrl|targeturl|url|link, sortIndex, enabled
+ * - file:   media (image)
+ */
 exports.createEntry = async (req, res) => {
   try {
     const sectionId = req.params.id;
@@ -135,19 +153,18 @@ exports.createEntry = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({ message: "Media file is required (field name: 'media')." });
     }
-    // Only images for entries (news cards)
     const type = req.file.mimetype || '';
     if (!type.startsWith('image/')) {
       return res.status(400).json({ message: 'Only image uploads are supported for News Hub entries.' });
     }
 
-    const { title, description, targetUrl, url, link, sortIndex, enabled } = req.body;
+    const { title, description, targetUrl, targeturl, url, link, sortIndex, enabled } = req.body;
     if (!title || !description) {
       return res.status(400).json({ message: 'title and description are required' });
     }
 
     // Normalize and require a valid URL (accept aliases)
-    const normalizedUrl = ensureHttp(targetUrl || url || link || '');
+    const normalizedUrl = ensureHttp(targetUrl || targeturl || url || link || '');
     if (!normalizedUrl) {
       return res.status(400).json({ message: 'targetUrl is required and must be a valid URL' });
     }
@@ -159,13 +176,11 @@ exports.createEntry = async (req, res) => {
     });
 
     // best-effort cleanup
-    try {
-      fs.unlinkSync(req.file.path);
-    } catch {}
+    try { fs.unlinkSync(req.file.path); } catch {}
 
     const entry = await NewsHubEntry.create({
       sectionId,
-      imageUrl: upload.secure_url,
+      imageUrl: String(upload.secure_url || '').trim(),
       title: String(title).trim(),
       description: String(description).trim(),
       targetUrl: normalizedUrl,
@@ -189,8 +204,15 @@ exports.updateEntry = async (req, res) => {
     if (req.body.title != null) updates.title = String(req.body.title).trim();
     if (req.body.description != null) updates.description = String(req.body.description).trim();
 
-    if (req.body.targetUrl != null || req.body.url != null || req.body.link != null) {
-      const normalized = ensureHttp(req.body.targetUrl || req.body.url || req.body.link || '');
+    if (
+      req.body.targetUrl != null ||
+      req.body.targeturl != null ||
+      req.body.url != null ||
+      req.body.link != null
+    ) {
+      const normalized = ensureHttp(
+        req.body.targetUrl || req.body.targeturl || req.body.url || req.body.link || ''
+      );
       if (!normalized) {
         return res.status(400).json({ message: 'targetUrl must be a valid URL' });
       }
