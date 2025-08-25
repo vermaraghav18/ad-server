@@ -32,6 +32,7 @@ const uploadRouter = require('./routes/uploadRouter');
 const liveUpdateHubRouter = require('./routes/liveUpdateHubRouter');
 const rssAggRouter = require('./routes/rssAggRouter');          // ✅ RSS aggregator
 const bannerConfigRouter = require('./routes/bannerConfigRouter');
+const xFeedsRouter = require('./routes/xFeedsRouter');
 
 // Optional: tiny outbound tester using the hardened client
 const { get: outboundGet } = require('./request');
@@ -124,6 +125,7 @@ app.use('/api/upload', uploadRouter);
 app.use('/api/live-update-hub', liveUpdateHubRouter);
 app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
+app.use('/api/xfeeds', xFeedsRouter);
 
 /* -------- Optional probe for outbound debugging ---------- */
 app.get('/api/_probe', async (req, res) => {
