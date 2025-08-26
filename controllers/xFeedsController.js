@@ -1,95 +1,111 @@
-const Parser = require('rss-parser');
-const XFeedBanner = require('../models/xFeedBanner');
+// controllers/xFeedsController.js
+const NodeCache = require('node-cache');
+const pLimit = require('p-limit');
+const dayjs = require('dayjs');
 
-const parser = new Parser({
-  timeout: 8000,
-  headers: { 'User-Agent': 'knotshorts-xfeeds/1.0' },
-});
+const XFeed = require('../models/XFeed');
+const { fetchMapped } = require('../services/rssFetcher');
+const { cleanItem, isEmojiOrLinkOnly } = require('../utils/xTextCleanser');
+const { scoreXItem } = require('../utils/xScore');
 
-// Simple in-memory cache: id -> { ts, items }
-const cache = new Map();
-const TTL_MS = (parseInt(process.env.XFEEDS_CACHE_TTL_SECONDS || '300', 10)) * 1000;
+const FEED_CACHE = new NodeCache({ stdTTL: 60 * 5 }); // 5 minutes
+const limit = pLimit(4);
 
-// Try to extract an image URL from common RSS fields
-function pickImage(item = {}) {
-  // enclosure.url
-  if (item.enclosure && item.enclosure.url) return item.enclosure.url;
-
-  // media:content
-  if (item.media && item.media.content && item.media.content.url) {
-    return item.media.content.url;
-  }
-  if (Array.isArray(item.mediaContent) && item.mediaContent[0]?.$?.url) {
-    return item.mediaContent[0].$.url;
-  }
-
-  // content:encoded or contentSnippet (first <img>)
-  const html = item['content:encoded'] || item.content || '';
-  const m = /<img[^>]+src=["']([^"']+)["']/i.exec(html);
-  if (m) return m[1];
-
-  return ''; // fallback handled client-side
+// GET /api/xfeeds
+async function listFeeds(req, res) {
+  const feeds = await XFeed.find({ enabled: true }).sort({ order: 1, name: 1 }).lean();
+  res.json(feeds.map(f => ({
+    id: String(f._id), name: f.name, url: f.url, enabled: f.enabled, lang: f.lang
+  })));
 }
 
-exports.list = async (req, res) => {
-  const banners = await XFeedBanner.find().sort({ enabled: -1, order: 1, createdAt: 1 }).lean();
-  res.json(banners);
-};
+// GET /api/xfeeds/items?limit=50&page=1&langs=en&dropPureRT=1&maxHashtags=2
+async function listItems(req, res) {
+  const pageSize = Math.min(parseInt(req.query.limit || '50', 10), 100);
+  const page = Math.max(parseInt(req.query.page || '1', 10), 1);
 
-exports.create = async (req, res) => {
-  const { title = '', rssUrl, iconUrl = '', order = 0, enabled = true } = req.body || {};
-  if (!rssUrl) return res.status(400).json({ error: 'rssUrl required' });
+  const maxHashtags = parseInt(req.query.maxHashtags || '2', 10);
+  const dropPureRT = String(req.query.dropPureRT || '1') === '1';
+  const allowedLangs = String(req.query.langs || 'en').split(',').filter(Boolean);
 
-  const doc = await XFeedBanner.create({ title, rssUrl, iconUrl, order, enabled });
-  res.status(201).json(doc);
-};
+  const enabledFeeds = await XFeed.find({ enabled: true }).sort({ order: 1 }).lean();
 
-exports.update = async (req, res) => {
-  const { id } = req.params;
-  const patch = req.body || {};
-  const updated = await XFeedBanner.findByIdAndUpdate(id, patch, { new: true }).lean();
-  if (!updated) return res.status(404).json({ error: 'not found' });
-  cache.delete(id); // invalidate cache on any changes
-  res.json(updated);
-};
+  const batches = await Promise.all(
+    enabledFeeds.map(feed =>
+      limit(async () => {
+        const cacheKey = `x:${feed.url}`;
+        const cached = FEED_CACHE.get(cacheKey);
+        if (cached) return cached;
+        const mapped = await fetchMapped(feed);
+        FEED_CACHE.set(cacheKey, mapped);
+        return mapped;
+      })
+    )
+  );
 
-exports.remove = async (req, res) => {
-  const { id } = req.params;
-  await XFeedBanner.findByIdAndDelete(id);
-  cache.delete(id);
-  res.json({ ok: true });
-};
+  const merged = batches.flat();
 
-exports.items = async (req, res) => {
-  const { id } = req.params;
-  const limit = Math.max(1, Math.min(10, parseInt(req.query.limit || '5', 10)));
+  // Clean, filter, score
+  const seenText = new Set();
+  const seenUrl = new Set();
 
-  const banner = await XFeedBanner.findById(id).lean();
-  if (!banner || !banner.enabled) return res.status(404).json({ error: 'not found' });
+  const cleaned = merged.map(m => {
+    const c = cleanItem({ contentHtml: m.contentHtml, description: m.description, title: m.title, link: m.link });
+    const item = {
+      id: m._internalId,
+      sourceId: m.sourceId,
+      authorName: m.authorName || '',
+      authorHandle: '', // can be parsed if your RSS includes it; keep blank otherwise
+      textRaw: m.title || '',
+      textClean: c.textClean,
+      url: c.externalUrl || m.link,
+      displayDomain: c.displayDomain,
+      thumbUrl: m.thumbUrl,
+      isQuote: false,          // could be inferred from HTML if needed
+      quoteText: null,
+      isRetweet: c.isRetweet,
+      lang: 'en',              // simple default; plug a language detector if you like
+      createdAt: m.pubDate,
+      hashtagCount: c.hashtagCount,
+      words: c.words,
+      isLinkOnly: isEmojiOrLinkOnly(c.textClean),
+    };
+    item.score = scoreXItem(item);
+    item._normTextKey = item.textClean.toLowerCase().replace(/\s+/g, ' ').slice(0, 280);
+    item._normUrlKey = (item.url || '').split('?')[0];
+    return item;
+  })
+  .filter(it => {
+    if (dropPureRT && it.isRetweet) return false;
+    if (it.hashtagCount > maxHashtags) return false;
+    if (it.isLinkOnly) return false;
+    if (allowedLangs.length && !allowedLangs.includes(it.lang)) return false;
 
-  // cache
-  const c = cache.get(id);
-  const now = Date.now();
-  if (c && (now - c.ts) < TTL_MS) {
-    return res.json({ id, title: banner.title, iconUrl: banner.iconUrl, items: c.items.slice(0, limit) });
-  }
+    // de-dup
+    if (it._normUrlKey && seenUrl.has(it._normUrlKey)) return false;
+    if (it._normTextKey && seenText.has(it._normTextKey)) return false;
+    if (it._normUrlKey) seenUrl.add(it._normUrlKey);
+    if (it._normTextKey) seenText.add(it._normTextKey);
+    return true;
+  })
+  .sort((a, b) => {
+    const t = new Date(b.createdAt) - new Date(a.createdAt);
+    if (t !== 0) return t;
+    return (b.score || 0) - (a.score || 0);
+  });
 
-  try {
-    const feed = await parser.parseURL(banner.rssUrl);
-    const items = (feed.items || []).slice(0, limit).map((it) => ({
-      id: it.id || it.guid || it.link,
-      title: it.title || '',
-      link: it.link,
-      pubDate: it.isoDate || it.pubDate || null,
-      description: it.contentSnippet || it.content || '',
-      imageUrl: pickImage(it),
-      author: it.creator || it.author || '',
-    }));
+  const start = (page - 1) * pageSize;
+  const pageItems = cleaned.slice(start, start + pageSize);
 
-    cache.set(id, { ts: now, items });
-    res.json({ id, title: banner.title, iconUrl: banner.iconUrl, items });
-  } catch (err) {
-    console.error('xfeeds parse failed', err.message);
-    res.status(502).json({ error: 'failed_to_fetch_feed' });
-  }
+  res.json({
+    page,
+    pageSize,
+    total: cleaned.length,
+    items: pageItems.map(({ _normTextKey, _normUrlKey, hashtagCount, words, ...rest }) => rest),
+  });
+}
+
+module.exports = {
+  listFeeds,
+  listItems,
 };
