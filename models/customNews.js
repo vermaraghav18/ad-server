@@ -1,23 +1,21 @@
-// models/CustomNews.js
 const mongoose = require('mongoose');
 
 const CustomNewsSchema = new mongoose.Schema(
   {
-    imageUrl:   { type: String, required: true },
-    title:      { type: String, required: true },
-    description:{ type: String, required: true },
-    source:     { type: String, required: true },
-    isActive:   { type: Boolean, default: true },
+    imageUrl: { type: String, required: true },
+    title: { type: String, required: true },
+    description: { type: String, required: true },
+    source: { type: String, required: true },
 
-    // optional extras used by banners (all optional)
-    headline:   { type: String },
-    url:        { type: String },  // web target
-    link:       { type: String },  // alias (rssAgg uses url || link)
-    deeplink:   { type: String },  // app target
-    thumbUrl:   { type: String },  // small image override
-    slug:       { type: String },
+    // ✅ NEW
+    topic: { type: String, trim: true, default: '' },
+
+    isActive: { type: Boolean, default: true }
   },
   { timestamps: true }
 );
+
+// helpful index (optional)
+CustomNewsSchema.index({ isActive: 1, topic: 1, createdAt: -1 });
 
 module.exports = mongoose.model('CustomNews', CustomNewsSchema);
