@@ -125,8 +125,6 @@ app.use('/api/live-update-hub', liveUpdateHubRouter);
 app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
 
-// (X Feeds router removed)
-
 /* -------- Optional probe for outbound debugging ---------- */
 app.get('/api/_probe', async (req, res) => {
   const url = req.query.url || 'https://example.com/';
