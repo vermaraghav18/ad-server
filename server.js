@@ -33,9 +33,6 @@ const liveUpdateHubRouter = require('./routes/liveUpdateHubRouter');
 const rssAggRouter = require('./routes/rssAggRouter');          // ✅ RSS aggregator
 const bannerConfigRouter = require('./routes/bannerConfigRouter');
 
-// ✅ New X Feeds (v2) router
-const xFeedsRouter = require('./routes/xFeedsRouter');
-
 // Optional: tiny outbound tester using the hardened client
 const { get: outboundGet } = require('./request');
 
@@ -128,9 +125,7 @@ app.use('/api/live-update-hub', liveUpdateHubRouter);
 app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
 
-// ✅ Mount NEW X Feeds v2 under /api (exposes /api/xfeeds & /api/xfeeds/items)
-// (Old /api/xfeeds mount removed)
-app.use('/api', xFeedsRouter);
+// (X Feeds router removed)
 
 /* -------- Optional probe for outbound debugging ---------- */
 app.get('/api/_probe', async (req, res) => {
@@ -185,6 +180,5 @@ app.listen(PORT, () => {
   console.log('   • /api/live-update-hub');
   console.log('   • /api/rss-agg  (cached 30s)');
   console.log('   • /api/banner-configs');
-  console.log('   • /api/xfeeds  &  /api/xfeeds/items  (X Feeds v2)');
   console.log('   • /api/_probe  (optional outbound tester)');
 });
