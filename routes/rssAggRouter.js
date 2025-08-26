@@ -293,7 +293,7 @@ async function resolveInjections(articles, category) {
   if (!banners.length) return [];
 
   // optional: resolve CustomNews docs for payloads (only if model file exists)
-  const CustomNews = safeRequire(path.join(__dirname, '..', 'models', 'CustomNews'));
+  const CustomNews = safeRequire(path.join(__dirname, '..', 'models', 'customNews'));
   const newsIdSet = new Set();
   for (const b of banners) {
     const id = b.payload?.customNewsId || b.customNewsId;
