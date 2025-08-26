@@ -1,7 +1,29 @@
-// routes/rssAggRouter.js
+// routes/rssAggRouter.js  — server-driven feed + banner injections (article-anchored)
+
 const express = require('express');
 const axios = require('axios').default;
 const RSSParser = require('rss-parser');
+const crypto = require('crypto');
+const path = require('path');
+
+/* -------------------- optional models -------------------- */
+let BannerConfig = null;
+try {
+  BannerConfig = require('../models/BannerConfig');
+} catch {
+  console.warn('[rss-agg] BannerConfig model not found; injections disabled');
+}
+
+/** Only require a module if it truly exists on disk (avoids editor/linter errors). */
+function safeRequire(p) {
+  try {
+    const resolved = require.resolve(p);
+    // eslint-disable-next-line import/no-dynamic-require, global-require
+    return require(resolved);
+  } catch {
+    return null;
+  }
+}
 
 const router = express.Router();
 const parser = new RSSParser({
@@ -13,18 +35,16 @@ const parser = new RSSParser({
   },
 });
 
-// ------------ config (env tunables) ------------------
-const REFRESH_MS      = Number(process.env.RSS_AGG_REFRESH_MS || 120000); // 3 min
-const PER_FEED_LIMIT  = Number(process.env.RSS_AGG_PER_FEED_LIMIT || 50);
-const MAX_FEEDS       = Number(process.env.RSS_AGG_MAX_FEEDS || 200);
-const CONCURRENCY     = Number(process.env.RSS_AGG_CONCURRENCY || 10);
+/* -------------------- config (env tunables) -------------------- */
+const REFRESH_MS     = Number(process.env.RSS_AGG_REFRESH_MS || 120000); // 2 min
+const PER_FEED_LIMIT = Number(process.env.RSS_AGG_PER_FEED_LIMIT || 50);
+const MAX_FEEDS      = Number(process.env.RSS_AGG_MAX_FEEDS || 200);
+const CONCURRENCY    = Number(process.env.RSS_AGG_CONCURRENCY || 10);
 
-// Try older pages for WordPress-like feeds to pull more than 10–20
-const EXTRA_PAGES     = Number(process.env.RSS_AGG_EXTRA_PAGES || 3); // fetch paged=2..N
-// Dedupe strategy
-const DEDUPE_BY       = (process.env.RSS_AGG_DEDUPE_BY || 'link').toLowerCase(); // 'link' | 'link_or_title'
+const EXTRA_PAGES    = Number(process.env.RSS_AGG_EXTRA_PAGES || 3); // fetch paged=2..N
+const DEDUPE_BY      = (process.env.RSS_AGG_DEDUPE_BY || 'link').toLowerCase(); // 'link' | 'link_or_title'
 
-// Where to call our own /api/feeds. Prefer explicit SELF_BASE_URL.
+// Where to call our own /api/feeds. Prefer explicit SELF_BASE_URL in prod.
 const SELF_BASE = process.env.SELF_BASE_URL || `http://localhost:${process.env.PORT || 5000}`;
 
 // Warm categories at boot (comma-separated).
@@ -33,7 +53,7 @@ const WARM_CATS = (process.env.RSS_AGG_WARM_CATEGORIES || '')
   .map((s) => s.trim())
   .filter(Boolean);
 
-// ------------- in-memory cache -----------------------
+/* -------------------- in-memory cache -------------------- */
 const cache = Object.create(null);
 
 function now() { return Date.now(); }
@@ -41,7 +61,20 @@ function keyFor(category) {
   return (category || '').trim().toLowerCase() || '__all__';
 }
 
-// ---------- helpers ----------
+/* -------------------- helpers -------------------- */
+function sha1(s) {
+  return crypto.createHash('sha1').update(String(s)).digest('hex').slice(0, 20);
+}
+
+function stableArticleId(entry, feedUrl) {
+  // Prefer link, then guid, else title+feed fallback
+  const link = (entry.link || '').trim();
+  const guid = (entry.guid || '').toString().trim();
+  const title = (entry.title || '').trim();
+  const base = link || guid || (title && feedUrl ? `${title}|${feedUrl}` : feedUrl);
+  return sha1(base || Math.random().toString(36));
+}
+
 function dedupe(items) {
   const out = [];
   const seen = new Set();
@@ -70,7 +103,7 @@ function pickImage(entry) {
   return m ? m[1] : '';
 }
 
-function toArticle(entry, feedTitle, feedUrl) {
+function toArticle(entry, feedTitle, feedUrl, forcedCategory = '') {
   const link = (entry.link || '').trim();
   const title = (entry.title || '').trim();
   const desc = (entry.contentSnippet || entry.summary || entry.content || '').toString().trim();
@@ -85,16 +118,17 @@ function toArticle(entry, feedTitle, feedUrl) {
   }
 
   const imageUrl = pickImage(entry);
+  const id = stableArticleId(entry, feedUrl);
 
   return {
-    id: link || title || feedUrl,
+    id, // ✅ stable id
     title,
     description: desc,
     summary: desc,
     link,
     imageUrl,
     source: feedTitle || '',
-    category: '',
+    category: forcedCategory || '', // ✅ helps category fallbacks
     author: entry.creator || entry.author || '',
     publishedAt,
     parsedDate: publishedAt,
@@ -163,7 +197,7 @@ async function fetchSingle(u) {
   try {
     const feed = await parser.parseURL(u);
     const title = feed.title || '';
-    const items = (feed.items || []).map((it) => toArticle(it, title, u));
+    const items = (feed.items || []).map((it) => toArticle(it, title, u /* feedUrl */));
     return items;
   } catch (e) {
     console.error('[rss-agg] feed fail:', u, e.message || e);
@@ -171,15 +205,21 @@ async function fetchSingle(u) {
   }
 }
 
-async function fetchOneFeedAll(u, perFeedLimit) {
+async function fetchOneFeedAll(u, perFeedLimit, forcedCategory = '') {
   // First page
   let items = await fetchSingle(u);
+  if (forcedCategory) {
+    items = items.map(a => ({ ...a, category: forcedCategory }));
+  }
 
   // Extra pages (older posts) for WordPress-like feeds
   if (EXTRA_PAGES > 0 && isWordPressLike(u)) {
     const variants = makePagedVariants(u, EXTRA_PAGES + 1); // adds paged=2..N
     for (const v of variants) {
-      const more = await fetchSingle(v);
+      let more = await fetchSingle(v);
+      if (forcedCategory) {
+        more = more.map(a => ({ ...a, category: forcedCategory }));
+      }
       items.push(...more);
     }
   }
@@ -188,13 +228,13 @@ async function fetchOneFeedAll(u, perFeedLimit) {
   return items.slice(0, perFeedLimit);
 }
 
-async function fetchAllFeeds(urls, perFeedLimit) {
+async function fetchAllFeeds(urls, perFeedLimit, forcedCategory = '') {
   const out = [];
   let i = 0;
   async function next() {
     if (i >= urls.length) return;
     const u = urls[i++];
-    const items = await fetchOneFeedAll(u, perFeedLimit);
+    const items = await fetchOneFeedAll(u, perFeedLimit, forcedCategory);
     out.push(...items);
     return next();
   }
@@ -211,7 +251,7 @@ async function rebuildCategory(category) {
   cache[k].refreshing = true;
   try {
     const urls = await getFeedUrls(category);
-    const items = await fetchAllFeeds(urls, PER_FEED_LIMIT);
+    const items = await fetchAllFeeds(urls, PER_FEED_LIMIT, category || '');
 
     items.sort((a, b) => {
       const da = a.publishedAt ? Date.parse(a.publishedAt) : 0;
@@ -232,7 +272,138 @@ async function rebuildCategory(category) {
   }
 }
 
-// ------------- routes -------------------------------
+/** Resolve banner injections against the given article list.
+ *  Supports new `anchor` shape, plus legacy: startAfter/repeatEvery/customNewsId/imageUrl.
+ */
+async function resolveInjections(articles, category) {
+  if (!BannerConfig) return [];
+  const nowDt = new Date();
+
+  // Load active configs
+  const banners = await BannerConfig.find({
+    $and: [
+      { $or: [{ isActive: { $exists: false } }, { isActive: true }] },
+      { $or: [{ activeFrom: { $exists: false } }, { activeFrom: { $lte: nowDt } }] },
+      { $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gte: nowDt } }] },
+    ],
+  })
+    .sort({ priority: -1 })
+    .lean();
+
+  if (!banners.length) return [];
+
+  // optional: resolve CustomNews docs for payloads (only if model file exists)
+  const CustomNews = safeRequire(path.join(__dirname, '..', 'models', 'CustomNews'));
+  const newsIdSet = new Set();
+  for (const b of banners) {
+    const id = b.payload?.customNewsId || b.customNewsId;
+    if (id) newsIdSet.add(String(id));
+  }
+
+  let newsDocsById = new Map();
+  if (CustomNews && newsIdSet.size) {
+    const docs = await CustomNews.find({ _id: { $in: Array.from(newsIdSet) } })
+      .select('title headline imageUrl thumbUrl link url slug deeplink createdAt updatedAt')
+      .lean();
+    newsDocsById = new Map(docs.map(d => [String(d._id), d]));
+  }
+
+  const idxById = new Map(articles.map((a, i) => [a.id, i]));
+  const topIdxByCat = new Map();
+  for (let i = 0; i < articles.length; i++) {
+    const c = (articles[i].category || '').toLowerCase();
+    if (c && !topIdxByCat.has(c)) topIdxByCat.set(c, i);
+  }
+
+  const injections = [];
+
+  const pushInjection = (afterId, bannerDoc) => {
+    const mode = bannerDoc.mode || bannerDoc.type || (bannerDoc.customNewsId ? 'news' : 'ad');
+    // build payload (prefer structured 'payload')
+    let payload = bannerDoc.payload || {};
+    if (!payload || Object.keys(payload).length === 0) {
+      // synthesize from legacy fields
+      if (mode === 'ad') {
+        payload = {
+          imageUrl: bannerDoc.imageUrl,
+          clickUrl: bannerDoc.clickUrl || bannerDoc.targetUrl || bannerDoc.deeplinkUrl,
+        };
+      } else if (mode === 'news') {
+        const nid = String(bannerDoc.customNewsId || '');
+        const doc = nid && newsDocsById.get(nid);
+        payload = {
+          headline: doc?.headline || doc?.title || bannerDoc.message || 'Editor’s pick',
+          imageUrl: doc?.imageUrl || doc?.thumbUrl,
+          clickUrl: doc?.url || doc?.link,
+          deeplinkUrl: doc?.deeplink,
+          customNewsId: nid || undefined,
+        };
+      } else {
+        payload = { headline: bannerDoc.message || 'More to read' };
+      }
+    }
+
+    injections.push({
+      afterId,
+      banner: {
+        id: String(bannerDoc._id),
+        mode,
+        payload,
+        priority: Number(bannerDoc.priority ?? 100),
+      },
+    });
+  };
+
+  for (const b of banners) {
+    const anchor = b.anchor || {};
+    // resolve anchor kind with back-compat to legacy slot fields
+    const kind =
+      anchor.kind ||
+      b.anchorKind ||
+      (b.articleKey ? 'article' : (typeof (anchor.nth ?? b.startAfter) === 'number' ? 'slot' : (anchor.category || b.category ? 'category' : 'slot')));
+
+    const articleKey = anchor.articleKey || b.articleKey;
+    const anchorCat = (anchor.category || b.category || category || '').toString().toLowerCase();
+
+    // slot parameters (supports legacy startAfter/repeatEvery)
+    const nth = Number(anchor.nth ?? (b.startAfter ? Math.max(1, b.startAfter) : 10));
+    const every = Number(b.repeatEvery || null) || null;
+
+    if (kind === 'article' && articleKey && idxById.has(articleKey)) {
+      pushInjection(articleKey, b);
+      continue;
+    }
+
+    if (kind === 'category' && anchorCat && topIdxByCat.has(anchorCat)) {
+      const topIdx = topIdxByCat.get(anchorCat);
+      pushInjection(articles[topIdx].id, b);
+      continue;
+    }
+
+    if (kind === 'slot') {
+      // one or multiple injections: after nth, then every 'every' cards
+      let pos = Math.max(1, nth) - 1; // convert to 0-based
+      while (pos < articles.length) {
+        pushInjection(articles[pos].id, b);
+        if (!every) break;
+        pos += Math.max(1, every);
+      }
+      continue;
+    }
+  }
+
+  // de-conflict: keep highest priority per afterId
+  const byAfterId = new Map();
+  for (const inj of injections) {
+    const prev = byAfterId.get(inj.afterId);
+    if (!prev || inj.banner.priority > prev.banner.priority) {
+      byAfterId.set(inj.afterId, inj);
+    }
+  }
+  return Array.from(byAfterId.values());
+}
+
+/* -------------------- routes -------------------- */
 router.get('/', async (req, res) => {
   try {
     const category = (req.query.category || '').toString();
@@ -261,8 +432,15 @@ router.get('/', async (req, res) => {
     const start = (page - 1) * pageSize;
     const slice = items.slice(start, start + pageSize);
 
+    // Resolve injections against the full list (so the anchor is deterministic),
+    // then filter to the current page (only inject where the afterId appears on this page).
+    const allInjections = await resolveInjections(items, category);
+    const sliceIds = new Set(slice.map(a => a.id));
+    const pageInjections = allInjections.filter(inj => sliceIds.has(inj.afterId));
+
     res.json({
-      items: slice,
+      items: slice,                 // ✅ unchanged for backwards-compat
+      injections: pageInjections,   // ✅ new sidecar channel
       total: items.length,
       updatedAt: entry ? entry.updatedAt : 0,
       stale: STALE,
@@ -273,7 +451,7 @@ router.get('/', async (req, res) => {
   }
 });
 
-// ------------- warmup -------------------------------
+/* -------------------- warmup -------------------- */
 async function warm() {
   if (!WARM_CATS.length) return;
   console.log('[rss-agg] warm categories:', WARM_CATS.join(', '));
