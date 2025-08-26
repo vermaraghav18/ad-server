@@ -303,7 +303,8 @@ async function resolveInjections(articles, category) {
   let newsDocsById = new Map();
   if (CustomNews && newsIdSet.size) {
     const docs = await CustomNews.find({ _id: { $in: Array.from(newsIdSet) } })
-      .select('title headline imageUrl thumbUrl link url slug deeplink createdAt updatedAt')
+      // ✅ include topic so we can fallback to it
+      .select('title headline imageUrl thumbUrl link url slug deeplink topic createdAt updatedAt')
       .lean();
     newsDocsById = new Map(docs.map(d => [String(d._id), d]));
   }
@@ -317,11 +318,18 @@ async function resolveInjections(articles, category) {
 
   const injections = [];
 
-  const pushInjection = (afterId, bannerDoc) => {
+  // ---------- build injection with topic propagation ----------
+  const pushInjection = (afterId, bannerDoc, topicForCustom) => {
     const mode = bannerDoc.mode || bannerDoc.type || (bannerDoc.customNewsId ? 'news' : 'ad');
-    // build payload (prefer structured 'payload')
-    let payload = bannerDoc.payload || {};
-    if (!payload || Object.keys(payload).length === 0) {
+
+    // Start from structured payload if present
+    const basePayload = bannerDoc.payload && Object.keys(bannerDoc.payload).length
+      ? { ...bannerDoc.payload }
+      : null;
+
+    let payload = basePayload || {};
+
+    if (!basePayload) {
       // synthesize from legacy fields
       if (mode === 'ad') {
         payload = {
@@ -337,11 +345,22 @@ async function resolveInjections(articles, category) {
           clickUrl: doc?.url || doc?.link,
           deeplinkUrl: doc?.deeplink,
           customNewsId: nid || undefined,
+          // fallback from the CustomNews doc if nothing else given
+          topic: (doc?.topic || '').toString().trim().toLowerCase() || undefined,
         };
       } else {
         payload = { headline: bannerDoc.message || 'More to read' };
       }
     }
+
+    // ✅ Normalize/ensure topic on payload
+    const nid = String(payload.customNewsId || bannerDoc.customNewsId || '');
+    const doc  = nid && newsDocsById.get(nid);
+    const topicFromBanner = (payload.topic || bannerDoc.topic || '').toString().trim().toLowerCase();
+    const topicFromDoc    = (doc?.topic || '').toString().trim().toLowerCase();
+    const topicFromAnchor = (topicForCustom || '').toString().trim().toLowerCase();
+
+    payload.topic = topicFromBanner || topicFromAnchor || topicFromDoc || undefined;
 
     injections.push({
       afterId,
@@ -360,23 +379,29 @@ async function resolveInjections(articles, category) {
     const kind =
       anchor.kind ||
       b.anchorKind ||
-      (b.articleKey ? 'article' : (typeof (anchor.nth ?? b.startAfter) === 'number' ? 'slot' : (anchor.category || b.category ? 'category' : 'slot')));
+      (b.articleKey
+        ? 'article'
+        : (typeof (anchor.nth ?? b.startAfter) === 'number'
+            ? 'slot'
+            : (anchor.category || b.category ? 'category' : 'slot')));
 
     const articleKey = anchor.articleKey || b.articleKey;
-    const anchorCat = (anchor.category || b.category || category || '').toString().toLowerCase();
+    const anchorCat = (anchor.category || b.category || category || '')
+      .toString()
+      .toLowerCase();
 
     // slot parameters (supports legacy startAfter/repeatEvery)
     const nth = Number(anchor.nth ?? (b.startAfter ? Math.max(1, b.startAfter) : 10));
     const every = Number(b.repeatEvery || null) || null;
 
     if (kind === 'article' && articleKey && idxById.has(articleKey)) {
-      pushInjection(articleKey, b);
+      pushInjection(articleKey, b, anchorCat);               // ← pass topic
       continue;
     }
 
     if (kind === 'category' && anchorCat && topIdxByCat.has(anchorCat)) {
       const topIdx = topIdxByCat.get(anchorCat);
-      pushInjection(articles[topIdx].id, b);
+      pushInjection(articles[topIdx].id, b, anchorCat);      // ← pass topic
       continue;
     }
 
@@ -384,7 +409,7 @@ async function resolveInjections(articles, category) {
       // one or multiple injections: after nth, then every 'every' cards
       let pos = Math.max(1, nth) - 1; // convert to 0-based
       while (pos < articles.length) {
-        pushInjection(articles[pos].id, b);
+        pushInjection(articles[pos].id, b, anchorCat);       // ← pass topic
         if (!every) break;
         pos += Math.max(1, every);
       }
@@ -440,7 +465,7 @@ router.get('/', async (req, res) => {
 
     res.json({
       items: slice,                 // ✅ unchanged for backwards-compat
-      injections: pageInjections,   // ✅ new sidecar channel
+      injections: pageInjections,   // ✅ now includes payload.topic when applicable
       total: items.length,
       updatedAt: entry ? entry.updatedAt : 0,
       stale: STALE,

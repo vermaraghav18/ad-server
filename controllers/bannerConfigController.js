@@ -15,12 +15,17 @@ function buildAnchor(body = {}) {
 }
 
 function buildPayload(body = {}) {
+  // accept topic from payload.topic or top-level topic
+  const rawTopic = body.payload?.topic ?? body.topic;
+  const topic = pick((rawTopic ?? '').toString().trim().toLowerCase());
+
   return {
-    headline:     pick(body.payload?.headline   ?? body.headline),
-    imageUrl:     pick(body.payload?.imageUrl   ?? body.imageUrl),
-    clickUrl:     pick(body.payload?.clickUrl   ?? body.clickUrl ?? body.targetUrl),
-    deeplinkUrl:  pick(body.payload?.deeplinkUrl?? body.deeplinkUrl),
+    headline:     pick(body.payload?.headline    ?? body.headline),
+    imageUrl:     pick(body.payload?.imageUrl    ?? body.imageUrl),
+    clickUrl:     pick(body.payload?.clickUrl    ?? body.clickUrl ?? body.targetUrl),
+    deeplinkUrl:  pick(body.payload?.deeplinkUrl ?? body.deeplinkUrl),
     customNewsId: pick(body.payload?.customNewsId ?? body.customNewsId),
+    topic, // ✅ NEW
   };
 }
 
@@ -67,7 +72,7 @@ exports.create = async (req, res) => {
       isActive: isActive === undefined ? true : !!JSON.parse(String(isActive)),
       activeFrom: activeFrom ? new Date(activeFrom) : undefined,
       activeTo: activeTo ? new Date(activeTo) : undefined,
-      // legacy mirrors (kept in sync)
+      // legacy mirrors (kept in sync for older clients)
       imageUrl: payload.imageUrl,
       customNewsId: payload.customNewsId,
       message: pick(message),
@@ -104,12 +109,14 @@ exports.update = async (req, res) => {
       req.body.imageUrl ||
       req.body.clickUrl ||
       req.body.deeplinkUrl ||
-      req.body.customNewsId
+      req.body.customNewsId ||
+      req.body.topic // ✅ allow top-level topic on update
     ) {
       updates.payload = buildPayload(req.body);
       // keep legacy mirrors in sync
-      if (updates.payload.imageUrl) updates.imageUrl = updates.payload.imageUrl;
+      if (updates.payload.imageUrl)     updates.imageUrl     = updates.payload.imageUrl;
       if (updates.payload.customNewsId) updates.customNewsId = updates.payload.customNewsId;
+      // (no legacy field for topic; it remains in payload.topic)
     }
 
     ['startAfter', 'repeatEvery', 'priority'].forEach((k) => {
@@ -118,7 +125,7 @@ exports.update = async (req, res) => {
     if (req.body.isActive !== undefined)
       updates.isActive = !!JSON.parse(String(req.body.isActive));
     if (req.body.activeFrom) updates.activeFrom = new Date(req.body.activeFrom);
-    if (req.body.activeTo) updates.activeTo = new Date(req.body.activeTo);
+    if (req.body.activeTo)   updates.activeTo   = new Date(req.body.activeTo);
     if (req.body.message !== undefined) updates.message = req.body.message;
 
     const doc = await BannerConfig.findByIdAndUpdate(req.params.id, updates, { new: true });
