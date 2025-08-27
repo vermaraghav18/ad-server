@@ -1,11 +1,13 @@
 // routes/featureBannerGroupRouter.js
-const router = require('express').Router();
-const ctl = require('../controllers/featureBannerGroupController');
+const express = require('express');
+const router = express.Router();
+const ctrl = require('../controllers/featureBannerGroupController');
 
-router.get('/', ctl.list);
-router.get('/active', ctl.listActive);
-router.post('/', ctl.create);
-router.put('/:id', ctl.update);
-router.delete('/:id', ctl.remove);
+// NOTE: handlers must be functions; don't call them here.
+router.get('/',        ctrl.list);
+router.get('/active',  ctrl.listActiveByCategory);
+router.post('/',       ctrl.create);
+router.put('/:id',     ctrl.update);
+router.delete('/:id',  ctrl.remove);
 
 module.exports = router;

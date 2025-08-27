@@ -1,93 +1,108 @@
-// …existing requires
+// controllers/featureBannerGroupController.js
 const FeatureBannerGroup = require('../models/FeatureBannerGroup');
 
-// CREATE
-exports.createGroup = async (req, res) => {
+// Coerce some fields from request body
+function normalizePayload(body = {}) {
+  const nth = Number(body.nth ?? 0);
+  const priority = Number(body.priority ?? 0);
+
+  const normalized = {
+    name: String(body.name ?? '').trim(),
+    category: String(body.category ?? '').trim(),
+    nth: Number.isFinite(nth) ? nth : 0,
+    priority: Number.isFinite(priority) ? priority : 0,
+    enabled: body.enabled !== false && body.enabled !== 'false',
+    articleKey: String(body.articleKey ?? '').trim(),   // ✅ NEW
+    startsAt: body.startsAt ? new Date(body.startsAt) : undefined,
+    endsAt:   body.endsAt   ? new Date(body.endsAt)   : undefined,
+    items: Array.isArray(body.items) ? body.items.map(it => ({
+      title: String(it.title ?? '').trim(),
+      link: String(it.link ?? '').trim(),
+      imageUrl: String(it.imageUrl ?? '').trim(),
+      description: String(it.description ?? '').trim(), // ✅ NEW
+      pubDate: it.pubDate ? new Date(it.pubDate) : undefined,
+    })) : [],
+  };
+
+  // Remove undefined so $set does not overwrite with undefined
+  Object.keys(normalized).forEach(k => normalized[k] === undefined && delete normalized[k]);
+  return normalized;
+}
+
+// GET /api/feature-banner-groups
+async function list(req, res, next) {
   try {
-    const {
-      name, category, nth, priority, enabled, startAt, endAt,
-      articleKey, // NEW
-      items = []
-    } = req.body;
+    const docs = await FeatureBannerGroup.find().sort({ updatedAt: -1 });
+    res.json(docs);
+  } catch (e) { next(e); }
+}
 
-    const normalizedItems = items.map(i => ({
-      title: i.title,
-      imageUrl: i.imageUrl || '',
-      link: i.link || '',
-      pubDate: i.pubDate || null,
-      description: i.description || '' // NEW
-    }));
-
-    const group = await FeatureBannerGroup.create({
-      name, category, nth, priority, enabled, startAt, endAt,
-      articleKey: articleKey || '', // NEW
-      items: normalizedItems
-    });
-
-    res.json(group);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-// UPDATE
-exports.updateGroup = async (req, res) => {
+// GET /api/feature-banner-groups/active?category=Top%20News
+async function listActiveByCategory(req, res, next) {
   try {
-    const { id } = req.params;
-    const g = await FeatureBannerGroup.findById(id);
-    if (!g) return res.status(404).json({ error: 'Not found' });
-
-    const {
-      name, category, nth, priority, enabled, startAt, endAt,
-      articleKey, // NEW
-      items
-    } = req.body;
-
-    if (name !== undefined) g.name = name;
-    if (category !== undefined) g.category = category;
-    if (nth !== undefined) g.nth = Number(nth);
-    if (priority !== undefined) g.priority = Number(priority);
-    if (enabled !== undefined) g.enabled = !!enabled;
-    if (startAt !== undefined) g.startAt = startAt || null;
-    if (endAt !== undefined) g.endAt = endAt || null;
-    if (articleKey !== undefined) g.articleKey = articleKey || ''; // NEW
-
-    if (Array.isArray(items)) {
-      g.items = items.map(i => ({
-        title: i.title,
-        imageUrl: i.imageUrl || '',
-        link: i.link || '',
-        pubDate: i.pubDate || null,
-        description: i.description || '' // NEW
-      }));
-    }
-
-    await g.save();
-    res.json(g);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Server error' });
-  }
-};
-
-// LIST (active by category) – unchanged logic, just returns new fields too
-exports.listActiveByCategory = async (req, res) => {
-  try {
-    const { category } = req.query;
+    const category = (req.query.category || req.query.cat || '').trim();
     const now = new Date();
-    const q = {
+
+    const baseMatch = {
       enabled: true,
       ...(category ? { category } : {}),
-      $and: [
-        { $or: [{ startAt: null }, { startAt: { $lte: now } }] },
-        { $or: [{ endAt: null }, { endAt: { $gte: now } }] },
-      ],
     };
-    const groups = await FeatureBannerGroup.find(q).sort({ priority: -1, nth: 1 }).lean();
-    res.json(groups);
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'Server error' });
-  }
+
+    const docs = await FeatureBannerGroup
+      .find(baseMatch)
+      .sort({ priority: -1, nth: 1, updatedAt: -1 });
+
+    const filtered = docs.filter(d =>
+      (!d.startsAt || d.startsAt <= now) &&
+      (!d.endsAt   || d.endsAt   >= now)
+    );
+
+    res.json(filtered);
+  } catch (e) { next(e); }
+}
+
+// POST /api/feature-banner-groups
+async function create(req, res, next) {
+  try {
+    const payload = normalizePayload(req.body);
+    if (!payload.name || !payload.category) {
+      return res.status(400).json({ error: 'name and category are required' });
+    }
+    const doc = await FeatureBannerGroup.create(payload);
+    res.status(201).json(doc);
+  } catch (e) { next(e); }
+}
+
+// PUT /api/feature-banner-groups/:id
+async function update(req, res, next) {
+  try {
+    const { id } = req.params;
+    const payload = normalizePayload(req.body);
+
+    const doc = await FeatureBannerGroup.findByIdAndUpdate(
+      id,
+      { $set: payload },
+      { new: true }
+    );
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+    res.json(doc);
+  } catch (e) { next(e); }
+}
+
+// DELETE /api/feature-banner-groups/:id
+async function remove(req, res, next) {
+  try {
+    const { id } = req.params;
+    const doc = await FeatureBannerGroup.findByIdAndDelete(id);
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+    res.json({ ok: true });
+  } catch (e) { next(e); }
+}
+
+module.exports = {
+  list,
+  listActiveByCategory,
+  create,
+  update,
+  remove,
 };
