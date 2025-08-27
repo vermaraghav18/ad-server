@@ -1,25 +1,34 @@
-// models/FeatureBannerGroup.js
 const mongoose = require('mongoose');
 
-const Item = new mongoose.Schema({
-  id: String,
-  title: String,
-  description: String,
-  imageUrl: String,
-  link: String,
-  source: String,
-  publishedAt: Date,
-});
+const FeatureBannerItemSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true },
+    imageUrl: { type: String, default: '' },
+    link: { type: String, default: '' },
+    pubDate: { type: Date },
+    // NEW: description shown below title in the card
+    description: { type: String, default: '' },
+  },
+  { _id: false }
+);
 
-const FeatureBannerGroupSchema = new mongoose.Schema({
-  name: { type: String, default: '' },
-  category: { type: String, required: true },      // e.g. "Sports"
-  nth: { type: Number, required: true, min: 1 },   // 1-based insertion index
-  priority: { type: Number, default: 0 },          // higher first
-  enabled: { type: Boolean, default: true },
-  startAt: Date,
-  endAt: Date,
-  items: { type: [Item], default: [] },            // 1+ articles
-}, { timestamps: true });
+const FeatureBannerGroupSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true },
+    category: { type: String, required: true },        // e.g. "Sports", "Top News"
+    nth: { type: Number, default: 0 },                 // place after Nth article
+    priority: { type: Number, default: 0 },
+    enabled: { type: Boolean, default: true },
+    startAt: { type: Date },
+    endAt: { type: Date },
+
+    // NEW: inject below a specific article when provided (wins over nth)
+    // This should match the "id" field from /api/rss-agg items.
+    articleKey: { type: String, default: '' },
+
+    items: { type: [FeatureBannerItemSchema], default: [] },
+  },
+  { timestamps: true }
+);
 
 module.exports = mongoose.model('FeatureBannerGroup', FeatureBannerGroupSchema);
