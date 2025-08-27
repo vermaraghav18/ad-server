@@ -1,10 +1,21 @@
 // controllers/featureBannerGroupController.js
+const mongoose = require('mongoose');
 const FeatureBannerGroup = require('../models/FeatureBannerGroup');
 
-// Coerce some fields from request body
+function toDateOrUndef(v) {
+  if (!v) return undefined;
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? undefined : d;
+}
+
+// Coerce & sanitize incoming body
 function normalizePayload(body = {}) {
   const nth = Number(body.nth ?? 0);
   const priority = Number(body.priority ?? 0);
+
+  // Accept BOTH startAt/endAt and startsAt/endsAt from the client
+  const startsAtRaw = body.startsAt ?? body.startAt;
+  const endsAtRaw   = body.endsAt   ?? body.endAt;
 
   const normalized = {
     name: String(body.name ?? '').trim(),
@@ -12,20 +23,25 @@ function normalizePayload(body = {}) {
     nth: Number.isFinite(nth) ? nth : 0,
     priority: Number.isFinite(priority) ? priority : 0,
     enabled: body.enabled !== false && body.enabled !== 'false',
-    articleKey: String(body.articleKey ?? '').trim(),   // ✅ NEW
-    startsAt: body.startsAt ? new Date(body.startsAt) : undefined,
-    endsAt:   body.endsAt   ? new Date(body.endsAt)   : undefined,
-    items: Array.isArray(body.items) ? body.items.map(it => ({
-      title: String(it.title ?? '').trim(),
-      link: String(it.link ?? '').trim(),
-      imageUrl: String(it.imageUrl ?? '').trim(),
-      description: String(it.description ?? '').trim(), // ✅ NEW
-      pubDate: it.pubDate ? new Date(it.pubDate) : undefined,
-    })) : [],
+    articleKey: String(body.articleKey ?? '').trim(),   // NEW
+    startsAt: toDateOrUndef(startsAtRaw),
+    endsAt:   toDateOrUndef(endsAtRaw),
+    items: Array.isArray(body.items)
+      ? body.items.map((it) => ({
+          title: String(it.title ?? '').trim(),
+          link: String(it.link ?? '').trim(),
+          imageUrl: String(it.imageUrl ?? '').trim(),
+          description: String(it.description ?? '').trim(), // NEW
+          pubDate: toDateOrUndef(it.pubDate),
+        }))
+      : [],
   };
 
-  // Remove undefined so $set does not overwrite with undefined
-  Object.keys(normalized).forEach(k => normalized[k] === undefined && delete normalized[k]);
+  // strip undefined so $set doesn't overwrite fields with undefined
+  Object.keys(normalized).forEach((k) => {
+    if (normalized[k] === undefined) delete normalized[k];
+  });
+
   return normalized;
 }
 
@@ -43,18 +59,14 @@ async function listActiveByCategory(req, res, next) {
     const category = (req.query.category || req.query.cat || '').trim();
     const now = new Date();
 
-    const baseMatch = {
-      enabled: true,
-      ...(category ? { category } : {}),
-    };
+    const match = { enabled: true, ...(category ? { category } : {}) };
 
     const docs = await FeatureBannerGroup
-      .find(baseMatch)
+      .find(match)
       .sort({ priority: -1, nth: 1, updatedAt: -1 });
 
-    const filtered = docs.filter(d =>
-      (!d.startsAt || d.startsAt <= now) &&
-      (!d.endsAt   || d.endsAt   >= now)
+    const filtered = docs.filter(
+      (d) => (!d.startsAt || d.startsAt <= now) && (!d.endsAt || d.endsAt >= now)
     );
 
     res.json(filtered);
@@ -77,13 +89,11 @@ async function create(req, res, next) {
 async function update(req, res, next) {
   try {
     const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
     const payload = normalizePayload(req.body);
-
-    const doc = await FeatureBannerGroup.findByIdAndUpdate(
-      id,
-      { $set: payload },
-      { new: true }
-    );
+    const doc = await FeatureBannerGroup.findByIdAndUpdate(id, { $set: payload }, { new: true });
     if (!doc) return res.status(404).json({ error: 'Not found' });
     res.json(doc);
   } catch (e) { next(e); }
@@ -93,16 +103,13 @@ async function update(req, res, next) {
 async function remove(req, res, next) {
   try {
     const { id } = req.params;
+    if (!mongoose.isValidObjectId(id)) {
+      return res.status(400).json({ error: 'Invalid id' });
+    }
     const doc = await FeatureBannerGroup.findByIdAndDelete(id);
     if (!doc) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true });
   } catch (e) { next(e); }
 }
 
-module.exports = {
-  list,
-  listActiveByCategory,
-  create,
-  update,
-  remove,
-};
+module.exports = { list, listActiveByCategory, create, update, remove };
