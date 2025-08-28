@@ -33,6 +33,7 @@ const liveUpdateHubRouter = require('./routes/liveUpdateHubRouter');
 const rssAggRouter = require('./routes/rssAggRouter');          // ✅ RSS aggregator
 const bannerConfigRouter = require('./routes/bannerConfigRouter');
 const featureBannerGroupRouter = require('./routes/featureBannerGroupRouter');
+const cartoonRouter = require('./routes/cartoonRouter');
 
 // Optional: tiny outbound tester using the hardened client
 const { get: outboundGet } = require('./request');
@@ -91,7 +92,7 @@ console.log('[CORS] allowlist:', allowlist);
 app.use(cors(corsOptions));
 
 app.set('trust proxy', 1);
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: '5mb' }));
 
 /* ----------- Ensure upload dirs exist & static ---------- */
 const baseUploadDir = path.join(__dirname, 'uploads');
@@ -126,6 +127,7 @@ app.use('/api/live-update-hub', liveUpdateHubRouter);
 app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
 app.use('/api/feature-banner-groups', featureBannerGroupRouter);
+app.use('/api/cartoons', cartoonRouter);
 
 /* -------- Optional probe for outbound debugging ---------- */
 app.get('/api/_probe', async (req, res) => {
