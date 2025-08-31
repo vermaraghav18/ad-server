@@ -1,14 +1,63 @@
-// models/BannerConfig.js  (DROP-IN REPLACEMENT)
+// models/BannerConfig.js  (DROP-IN REPLACEMENT: adds per-section targeting)
+// Back-compat preserved for existing fields and behavior.
+
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 
+/* ---------- Enumerations for targeting ---------- */
+const SECTION_CATEGORIES = ['top', 'finance'];
+
+const CITIES = [
+  'Ahmedabad',
+  'Bangalore',
+  'Bhopal',
+  'Chennai',
+  'Chandigarh',
+  'Delhi',
+  'Gurgaon',
+  'Hyderabad',
+  'Indore',
+  'Jaipur',
+  'Jalandhar',
+  'Kanpur',
+  'Kolkata',
+  'Lucknow',
+  'Mumbai',
+  'Patna',
+  'Pune',
+  'Surat',
+  'Vadodara',
+  'Visakhapatnam',
+];
+
+const STATES = [
+  'Delhi',
+  'Punjab',
+  'Maharashtra',
+  'Tamil Nadu',
+  'West Bengal',
+  'Karnataka',
+  'Uttar Pradesh',
+  'Rajasthan',
+  'Madhya-Pradesh',
+  'Himachal Pradesh',
+  'Andhra Pradesh',
+  'Bihar',
+  'Chhattisgarh',
+  'Gujarat',
+  'Haryana',
+  'Kerala',
+  'Jharkhand',
+];
+
+/* ---------- Subschemas ---------- */
 const PayloadSchema = new Schema(
   {
     // Generic payload fields (both modes can use these)
     headline: { type: String },
     imageUrl: { type: String },
-    clickUrl: { type: String },   // web target
-    deeplinkUrl: { type: String },// app target (optional)
+    clickUrl: { type: String }, // web target
+    deeplinkUrl: { type: String }, // app target (optional)
     // For news mode (optional; we’ll resolve details at runtime)
     customNewsId: { type: Schema.Types.ObjectId, ref: 'CustomNews' },
   },
@@ -33,15 +82,27 @@ const AnchorSchema = new Schema(
   { _id: false }
 );
 
+// NEW: Per-section targeting (what sections this banner may show in)
+const BannerTargetsSchema = new Schema(
+  {
+    includeAll: { type: Boolean, default: true }, // true => global (current behavior)
+    categories: [{ type: String, enum: SECTION_CATEGORIES }], // e.g., ['top']
+    cities: [{ type: String, enum: CITIES }], // e.g., ['Jalandhar']
+    states: [{ type: String, enum: STATES }], // e.g., ['Punjab']
+  },
+  { _id: false }
+);
+
+/* ---------- Main Schema ---------- */
 const BannerConfigSchema = new Schema(
   {
     // what to render
     mode: { type: String, enum: ['ad', 'news', 'empty'], required: true },
 
-    // server-driven layout anchor (NEW)
+    // server-driven layout anchor
     anchor: { type: AnchorSchema, default: () => ({}) },
 
-    // content payload (NEW, optional; old top-level fields still work)
+    // content payload (optional; old top-level fields still work)
     payload: { type: PayloadSchema, default: () => ({}) },
 
     // -------- Back-compat (kept) --------
@@ -63,6 +124,13 @@ const BannerConfigSchema = new Schema(
       default: null,
     }, // news content
     message: { type: String, default: 'Tap to read more' }, // for empty/news copy
+
+    // -------- NEW: Per-section targeting --------
+    // By default, behave exactly like today (global banners).
+    targets: { type: BannerTargetsSchema, default: () => ({ includeAll: true }) },
+
+    // Computed: how specific a config is (city 3 > state 2 > category 1 > all 0)
+    specificityLevel: { type: Number, default: 0 },
   },
   { timestamps: true, minimize: false }
 );
@@ -92,13 +160,37 @@ BannerConfigSchema.pre('validate', function (next) {
   // Back-compat: if no explicit anchor provided, derive from legacy fields
   if (!this.anchor || !this.anchor.kind) {
     // translate startAfter/repeatEvery into a primary slot (nth=startAfter or startAfter+1)
-    const nth = Math.max(1, Number(this.startAfter || 0)) ; // startAfter=0 -> nth=1 (after first article)
+    const nth = Math.max(1, Number(this.startAfter || 0)); // startAfter=0 -> nth=1 (after first article)
     this.anchor = this.anchor || {};
     this.anchor.kind = 'slot';
     this.anchor.nth = nth;
   }
 
-  // Minimal per-mode validation (but stay lenient to allow admin drafts)
+  // -------- Targeting normalization + specificity --------
+  const t = this.targets || {};
+  // categories to lowercase
+  if (Array.isArray(t.categories)) {
+    this.targets.categories = t.categories
+      .filter(Boolean)
+      .map((c) => String(c).trim().toLowerCase());
+  }
+
+  const hasCities = Array.isArray(t.cities) && t.cities.length > 0;
+  const hasStates = Array.isArray(t.states) && t.states.length > 0;
+  const hasCats = Array.isArray(this.targets.categories) && this.targets.categories.length > 0;
+
+  // If includeAll is true, clear arrays to avoid ambiguity
+  if (t.includeAll === true) {
+    this.targets.categories = [];
+    this.targets.cities = [];
+    this.targets.states = [];
+  }
+
+  // Compute specificity: city > state > category > all
+  const includeAll = !!t.includeAll;
+  this.specificityLevel = includeAll ? 0 : hasCities ? 3 : hasStates ? 2 : hasCats ? 1 : 0;
+
+  // Minimal per-mode validation (stay lenient to allow admin drafts)
   if (this.mode === 'ad') {
     const img = this.payload?.imageUrl || this.imageUrl;
     if (!img) return next(new Error('imageUrl is required for ad mode'));
@@ -107,18 +199,35 @@ BannerConfigSchema.pre('validate', function (next) {
     const hasNewsRef = !!(this.payload?.customNewsId || this.customNewsId);
     if (!hasNewsRef) {
       // allow a pure payload-based news (headline+click/deeplink) if provided
-      const hasInline = !!(this.payload?.headline && (this.payload?.clickUrl || this.payload?.deeplinkUrl));
-      if (!hasInline) return next(new Error('customNewsId or payload (headline+url) is required for news mode'));
+      const hasInline = !!(
+        this.payload?.headline && (this.payload?.clickUrl || this.payload?.deeplinkUrl)
+      );
+      if (!hasInline)
+        return next(
+          new Error('customNewsId or payload (headline+url) is required for news mode')
+        );
     }
   }
+
   next();
 });
 
 /* ---------- Indexes ---------- */
-BannerConfigSchema.index({ isActive: 1, priority: -1 });
+// Primary sort/filter: active, then most specific, then highest priority
+BannerConfigSchema.index({ isActive: 1, specificityLevel: -1, priority: -1 });
+
+// Anchor lookups (legacy + server-side selection)
 BannerConfigSchema.index({ 'anchor.kind': 1, 'anchor.articleKey': 1 });
 BannerConfigSchema.index({ 'anchor.kind': 1, 'anchor.category': 1 });
 BannerConfigSchema.index({ 'anchor.kind': 1, 'anchor.nth': 1 });
-BannerConfigSchema.index({ mode: 1, startAfter: 1 }); // legacy queries
+
+// Legacy queries
+BannerConfigSchema.index({ mode: 1, startAfter: 1 });
+
+// NEW: Target-based filtering
+BannerConfigSchema.index({ 'targets.includeAll': 1 });
+BannerConfigSchema.index({ 'targets.categories': 1 });
+BannerConfigSchema.index({ 'targets.cities': 1 });
+BannerConfigSchema.index({ 'targets.states': 1 });
 
 module.exports = mongoose.model('BannerConfig', BannerConfigSchema);
