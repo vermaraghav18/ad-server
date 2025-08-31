@@ -1,8 +1,36 @@
 // server.js
-// --- Force IPv4 first to avoid ENETUNREACH on IPv6-only lookups ---
+
+// --- Prefer IPv4 everywhere to avoid ENETUNREACH on IPv6-only routes -----
 const dns = require('node:dns');
-dns.setDefaultResultOrder('ipv4first'); // or set NODE_OPTIONS="--dns-result-order=ipv4first"
-// ------------------------------------------------------------------
+const http = require('node:http');
+const https = require('node:https');
+
+try {
+  // Node ≥17: prefer IPv4 when resolving A/AAAA
+  dns.setDefaultResultOrder('ipv4first');
+} catch {}
+
+const originalLookup = dns.lookup;
+// Wrap default lookup so ALL outbound requests use IPv4
+function ipv4Lookup(hostname, options, callback) {
+  if (typeof options === 'function') {
+    callback = options;
+    options = {};
+  }
+  return originalLookup(
+    hostname,
+    { ...options, family: 4, all: false },
+    callback
+  );
+}
+
+// Apply to global agents so libraries (axios, node-fetch, Cloudinary, etc.) inherit it
+http.globalAgent.options.lookup = ipv4Lookup;
+https.globalAgent.options.lookup = ipv4Lookup;
+// Some stacks also honor a plain family hint:
+http.globalAgent.options.family = 4;
+https.globalAgent.options.family = 4;
+// -------------------------------------------------------------------------
 
 require('dotenv').config(); // load env first
 
@@ -182,5 +210,7 @@ app.listen(PORT, () => {
   console.log('   • /api/live-update-hub');
   console.log('   • /api/rss-agg  (cached 30s)');
   console.log('   • /api/banner-configs');
+  console.log('   • /api/feature-banner-groups');
+  console.log('   • /api/cartoons');
   console.log('   • /api/_probe  (optional outbound tester)');
 });
