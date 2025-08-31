@@ -6,10 +6,35 @@ const fs = require('fs');
 /**
  * GET /api/ads
  * List ads (newest first)
+ *
+ * BEHAVIOR CHANGE:
+ * - If the request comes from the app with `?mode=scroll`, return ZERO ads.
+ *   (We want Ads feature only in Swipe mode.)
+ * - If `?mode=swipe`, return enabled ads whose placement allows swipe (default "swipeOnly").
+ * - If no mode is provided (admin panel), return the full list (as before).
  */
-exports.list = async (_req, res) => {
+exports.list = async (req, res) => {
   try {
-    const ads = await Ad.find().sort({ createdAt: -1 });
+    const mode = String(req.query.mode || '').toLowerCase();
+
+    // Admin list (no mode provided): show all, newest first
+    if (!mode) {
+      const ads = await Ad.find().sort({ createdAt: -1 });
+      return res.json(ads);
+    }
+
+    // App list with explicit mode
+    if (mode === 'scroll') {
+      // Enforce product requirement: NO Ads in Scroll mode.
+      return res.json([]);
+    }
+
+    // Swipe mode -> return enabled ads, honoring placement (swipeOnly or both)
+    const ads = await Ad.find({
+      enabled: true,
+      placement: { $in: ['swipeOnly', 'both'] },
+    }).sort({ createdAt: -1 });
+
     return res.json(ads);
   } catch (e) {
     console.error('❌ Fetch ads failed:', e?.message || e);
@@ -21,11 +46,14 @@ exports.list = async (_req, res) => {
  * POST /api/ads
  * Create ad (expects multipart/form-data with:
  *  - file field: "image"
- *  - body fields: link (required), title, description, target, type
+ *  - body fields: link (required), title, description, target, type, placement?
+ *
+ * Defaults:
+ *  - type: "normal"
+ *  - placement: "swipeOnly" (so Ads never appear in Scroll unless explicitly changed later)
  */
 exports.create = async (req, res) => {
   try {
-    // 1) Validate inputs early (so we return 400 with a clear reason)
     if (!req.file) {
       return res.status(400).json({ error: 'No image file uploaded', field: 'image' });
     }
@@ -36,40 +64,38 @@ exports.create = async (req, res) => {
       target = 'All',
       description = '',
       type = 'normal',
+      placement = 'swipeOnly', // NEW
     } = req.body;
 
     if (!link) {
       return res.status(400).json({ error: 'Link is required', field: 'link' });
     }
 
-    // 2) Log what we received (shows up in Render logs)
-    console.log('[ADS][CREATE] body:', { title, link, target, description, type });
+    console.log('[ADS][CREATE] body:', { title, link, target, description, type, placement });
     console.log('[ADS][CREATE] file:', req.file);
 
-    // 3) Upload temp file to Cloudinary
     const upload = await cloudinary.uploader.upload(req.file.path, {
       folder: 'knotshorts/ads',
       resource_type: 'image',
     });
 
-    // 4) Clean temp file (ignore errors)
     try { fs.unlinkSync(req.file.path); } catch {}
 
-    // 5) Save to Mongo
     const ad = await Ad.create({
       title: type === 'fullpage' ? '' : title,
       link,
       target,
       description: type === 'fullpage' ? '' : description,
       type,
+      placement,             // NEW
       enabled: true,
-      imageUrl: upload.secure_url, // full Cloudinary URL
+      imageUrl: upload.secure_url,
+      origin: 'ads',         // NEW (schema default, included for clarity)
     });
 
     console.log('[ADS][CREATE] saved:', ad._id);
     return res.status(201).json(ad);
   } catch (e) {
-    // Cloudinary often nests messages on e.response; surface them
     const detail = e?.response?.body || e?.response?.text || e?.message || e;
     console.error('🔥 Create ad failed:', detail);
     return res.status(500).json({ error: 'Failed to create ad', detail });
