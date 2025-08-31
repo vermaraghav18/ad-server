@@ -3,14 +3,23 @@ const Ad = require('../models/adModel');
 const cloudinary = require('../utils/cloudinary');
 const fs = require('fs');
 
+// Helpers
+const toNonNegIntOrUndef = (v) => {
+  if (v === undefined || v === null || v === '') return undefined;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.max(0, Math.floor(n));
+};
+const normType = (t) => (['normal', 'fullpage'].includes(String(t)) ? String(t) : 'normal');
+const normPlacement = (p) => (['swipeOnly', 'both'].includes(String(p)) ? String(p) : 'swipeOnly');
+
 /**
  * GET /api/ads
  * List ads (newest first)
  *
- * BEHAVIOR CHANGE:
+ * BEHAVIOR:
  * - If the request comes from the app with `?mode=scroll`, return ZERO ads.
- *   (We want Ads feature only in Swipe mode.)
- * - If `?mode=swipe`, return enabled ads whose placement allows swipe (default "swipeOnly").
+ * - If `?mode=swipe`, return enabled ads whose placement allows swipe.
  * - If no mode is provided (admin panel), return the full list (as before).
  */
 exports.list = async (req, res) => {
@@ -46,7 +55,8 @@ exports.list = async (req, res) => {
  * POST /api/ads
  * Create ad (expects multipart/form-data with:
  *  - file field: "image"
- *  - body fields: link (required), title, description, target, type, placement?
+ *  - body fields: link (required), title, description, target, type, placement
+ *  - NEW body fields: afterNth, repeatEvery, repeatCount (numbers)
  *
  * Defaults:
  *  - type: "normal"
@@ -64,36 +74,44 @@ exports.create = async (req, res) => {
       target = 'All',
       description = '',
       type = 'normal',
-      placement = 'swipeOnly', // NEW
+      placement = 'swipeOnly',
+      afterNth,
+      repeatEvery,
+      repeatCount,
     } = req.body;
 
     if (!link) {
       return res.status(400).json({ error: 'Link is required', field: 'link' });
     }
 
-    console.log('[ADS][CREATE] body:', { title, link, target, description, type, placement });
-    console.log('[ADS][CREATE] file:', req.file);
-
     const upload = await cloudinary.uploader.upload(req.file.path, {
       folder: 'knotshorts/ads',
       resource_type: 'image',
     });
 
-    try { fs.unlinkSync(req.file.path); } catch {}
+    try {
+      fs.unlinkSync(req.file.path);
+    } catch {}
+
+    const cleanType = normType(type);
+    const cleanPlacement = normPlacement(placement);
 
     const ad = await Ad.create({
-      title: type === 'fullpage' ? '' : title,
+      title: cleanType === 'fullpage' ? '' : title,
       link,
       target,
-      description: type === 'fullpage' ? '' : description,
-      type,
-      placement,             // NEW
+      description: cleanType === 'fullpage' ? '' : description,
+      type: cleanType,
+      placement: cleanPlacement,
       enabled: true,
       imageUrl: upload.secure_url,
-      origin: 'ads',         // NEW (schema default, included for clarity)
+      origin: 'ads',
+      // Scheduling (non-negative integers; undefined => schema default)
+      afterNth: toNonNegIntOrUndef(afterNth),
+      repeatEvery: toNonNegIntOrUndef(repeatEvery),
+      repeatCount: toNonNegIntOrUndef(repeatCount),
     });
 
-    console.log('[ADS][CREATE] saved:', ad._id);
     return res.status(201).json(ad);
   } catch (e) {
     const detail = e?.response?.body || e?.response?.text || e?.message || e;
@@ -104,12 +122,34 @@ exports.create = async (req, res) => {
 
 /**
  * PUT /api/ads/:id
- * Update ad (any fields)
+ * Update ad (any fields). Also sanitizes scheduling + enums if provided.
+ * (Note: this handler does not update images. Keep using create for image upload,
+ * or extend this to accept an optional file if you want image updates here.)
  */
 exports.update = async (req, res) => {
   try {
     const { id } = req.params;
-    const doc = await Ad.findByIdAndUpdate(id, req.body, { new: true });
+
+    const body = { ...req.body };
+
+    // Normalize enums if present
+    if ('type' in body) body.type = normType(body.type);
+    if ('placement' in body) body.placement = normPlacement(body.placement);
+
+    // Sanitize numeric scheduling fields
+    ['afterNth', 'repeatEvery', 'repeatCount'].forEach((k) => {
+      if (k in body) {
+        const v = toNonNegIntOrUndef(body[k]);
+        if (v === undefined) {
+          // If invalid/empty -> let schema defaults take over by removing key
+          delete body[k];
+        } else {
+          body[k] = v;
+        }
+      }
+    });
+
+    const doc = await Ad.findByIdAndUpdate(id, body, { new: true });
     if (!doc) return res.status(404).json({ error: 'Ad not found' });
     return res.json(doc);
   } catch (e) {
