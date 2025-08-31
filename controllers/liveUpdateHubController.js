@@ -67,6 +67,7 @@ exports.createSection = async (req, res) => {
     const placementIndex = toInt(req.body.placementIndex);
     const sortIndex = toInt(req.body.sortIndex, 0);
     const enabled = toBool(req.body.enabled, true);
+    const backgroundImageUrl = (req.body.backgroundImageUrl || '').trim(); // NEW (optional)
 
     if (!name || !heading || !placementIndex) {
       return res.status(400).json({ error: 'name, heading, placementIndex are required' });
@@ -78,6 +79,7 @@ exports.createSection = async (req, res) => {
       placementIndex,
       sortIndex,
       enabled,
+      backgroundImageUrl, // NEW
     });
 
     res.status(201).json(doc);
@@ -102,6 +104,11 @@ exports.updateSection = async (req, res) => {
 
     const enabled = toBool(req.body.enabled);
     if (enabled !== undefined) updates.enabled = enabled;
+
+    // NEW: allow setting/clearing via JSON
+    if (req.body.backgroundImageUrl !== undefined) {
+      updates.backgroundImageUrl = String(req.body.backgroundImageUrl || '').trim();
+    }
 
     const doc = await LiveUpdateHubSection.findByIdAndUpdate(id, updates, { new: true });
     if (!doc) return res.status(404).json({ error: 'Section not found' });
@@ -137,7 +144,7 @@ exports.createEntry = async (req, res) => {
     const sortIndex = toInt(req.body.sortIndex, 0);
     const enabled = toBool(req.body.enabled, true);
     const targetUrl = (req.body.targetUrl || '').trim();
-    const source = (req.body.source || '').trim(); // ⬅️ NEW
+    const source = (req.body.source || '').trim(); // NEW
 
     if (!sectionId) return res.status(400).json({ error: 'Section id is required' });
     if (!title || !description) {
@@ -158,7 +165,7 @@ exports.createEntry = async (req, res) => {
       targetUrl,
       sortIndex,
       enabled,
-      source, // ⬅️ NEW
+      source, // NEW
     });
 
     res.status(201).json(doc);
@@ -166,7 +173,6 @@ exports.createEntry = async (req, res) => {
     console.error('LiveUpdateHub:createEntry error', err);
     res.status(500).json({ error: 'Failed to create entry' });
   } finally {
-    // Clean up temp file if present
     if (tmpPath) {
       try { fs.unlinkSync(tmpPath); } catch {}
     }
@@ -181,7 +187,7 @@ exports.updateEntry = async (req, res) => {
     if (req.body.title !== undefined) updates.title = String(req.body.title).trim();
     if (req.body.description !== undefined) updates.description = String(req.body.description).trim();
     if (req.body.targetUrl !== undefined) updates.targetUrl = String(req.body.targetUrl).trim();
-    if (req.body.source !== undefined) updates.source = String(req.body.source).trim(); // ⬅️ NEW
+    if (req.body.source !== undefined) updates.source = String(req.body.source).trim(); // NEW
 
     const sortIndex = toInt(req.body.sortIndex);
     if (sortIndex !== undefined) updates.sortIndex = sortIndex;
@@ -208,5 +214,42 @@ exports.deleteEntry = async (req, res) => {
   } catch (err) {
     console.error('LiveUpdateHub:deleteEntry error', err);
     res.status(500).json({ error: 'Failed to delete entry' });
+  }
+};
+
+/**
+ * NEW: Upload/replace a section's swipe background image
+ * Route: PATCH /api/live-update-hub/sections/:id/background
+ * Expect: multipart/form-data with field name 'background'
+ */
+exports.updateSectionBackground = async (req, res) => {
+  const tmpPath = req.file?.path;
+  if (!tmpPath) return res.status(400).json({ error: "No file provided (field 'background')." });
+
+  try {
+    const { id } = req.params;
+
+    // Upload to Cloudinary
+    const up = await cloudinary.uploader.upload(tmpPath, {
+      resource_type: 'image',
+      folder: 'knotshorts/live-update-hub/section-bg',
+    });
+
+    // Save URL on section
+    const doc = await LiveUpdateHubSection.findByIdAndUpdate(
+      id,
+      { backgroundImageUrl: up.secure_url },
+      { new: true }
+    );
+    if (!doc) return res.status(404).json({ error: 'Section not found' });
+
+    res.json(doc);
+  } catch (err) {
+    console.error('LiveUpdateHub:updateSectionBackground error', err);
+    res.status(500).json({ error: 'Failed to update section background' });
+  } finally {
+    if (tmpPath) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
   }
 };
