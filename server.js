@@ -62,6 +62,7 @@ const rssAggRouter = require('./routes/rssAggRouter');          // ✅ RSS aggre
 const bannerConfigRouter = require('./routes/bannerConfigRouter');
 const featureBannerGroupRouter = require('./routes/featureBannerGroupRouter');
 const cartoonRouter = require('./routes/cartoonRouter');
+const sectionsRouter = require('./routes/sectionsRouter');
 
 // Optional: tiny outbound tester using the hardened client
 const { get: outboundGet } = require('./request');
@@ -156,6 +157,7 @@ app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
 app.use('/api/feature-banner-groups', featureBannerGroupRouter);
 app.use('/api/cartoons', cartoonRouter);
+app.use('/api/sections', sectionsRouter);
 
 /* -------- Optional probe for outbound debugging ---------- */
 app.get('/api/_probe', async (req, res) => {
