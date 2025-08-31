@@ -61,7 +61,13 @@ const liveUpdateHubRouter = require('./routes/liveUpdateHubRouter');
 const rssAggRouter = require('./routes/rssAggRouter');          // ✅ RSS aggregator
 const bannerConfigRouter = require('./routes/bannerConfigRouter');
 const featureBannerGroupRouter = require('./routes/featureBannerGroupRouter');
+
+// ❗ Legacy cartoons router (older endpoints)
 const cartoonRouter = require('./routes/cartoonRouter');
+
+// ✅ NEW: Cartoon Hub router (sections + items, nth position, repeat scheduling)
+const cartoonHubRouter = require('./routes/cartoonHubRouter');
+
 const sectionsRouter = require('./routes/sectionsRouter');
 
 // Optional: tiny outbound tester using the hardened client
@@ -156,7 +162,13 @@ app.use('/api/live-update-hub', liveUpdateHubRouter);
 app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
 app.use('/api/feature-banner-groups', featureBannerGroupRouter);
+
+// ✅ NEW Cartoon Hub (modern endpoints: sections + items)
+app.use('/api/cartoon-hub', cartoonHubRouter);
+
+// ❗ Keep legacy cartoons route for backward compatibility (can remove later)
 app.use('/api/cartoons', cartoonRouter);
+
 app.use('/api/sections', sectionsRouter);
 
 /* -------- Optional probe for outbound debugging ---------- */
@@ -213,6 +225,8 @@ app.listen(PORT, () => {
   console.log('   • /api/rss-agg  (cached 30s)');
   console.log('   • /api/banner-configs');
   console.log('   • /api/feature-banner-groups');
-  console.log('   • /api/cartoons');
+  console.log('   • /api/cartoon-hub');      // ✅ NEW
+  console.log('   • /api/cartoons (legacy)'); // ❗ legacy
+  console.log('   • /api/sections');
   console.log('   • /api/_probe  (optional outbound tester)');
 });
