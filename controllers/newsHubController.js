@@ -83,15 +83,19 @@ exports.getHub = async (_req, res) => {
 exports.createSection = async (req, res) => {
   try {
     const { name, heading, placementIndex, enabled, sortIndex } = req.body;
+    const backgroundImageUrl = ensureHttp(req.body.backgroundImageUrl || ''); // NEW (optional)
+
     if (!name || !heading || !placementIndex) {
       return res.status(400).json({ message: 'name, heading, placementIndex are required' });
     }
+
     const doc = await NewsHubSection.create({
       name: String(name).trim(),
       heading: String(heading).trim(),
       placementIndex: Math.max(1, toInt(placementIndex, 1)),
       sortIndex: toInt(sortIndex, 0),
       enabled: toBool(enabled ?? true),
+      backgroundImageUrl, // NEW
     });
     res.status(201).json(doc);
   } catch (err) {
@@ -112,6 +116,12 @@ exports.updateSection = async (req, res) => {
       updates.placementIndex = Math.max(1, toInt(req.body.placementIndex, 1));
     if (req.body.sortIndex != null) updates.sortIndex = toInt(req.body.sortIndex, 0);
     if (req.body.enabled != null) updates.enabled = toBool(req.body.enabled);
+
+    // NEW: allow JSON set/clear of backgroundImageUrl
+    if (req.body.backgroundImageUrl !== undefined) {
+      const raw = String(req.body.backgroundImageUrl || '').trim();
+      updates.backgroundImageUrl = raw ? ensureHttp(raw) : '';
+    }
 
     const doc = await NewsHubSection.findByIdAndUpdate(req.params.id, updates, { new: true });
     if (!doc) return res.status(404).json({ message: 'Section not found' });
@@ -243,5 +253,44 @@ exports.deleteEntry = async (req, res) => {
     res
       .status(400)
       .json({ message: 'Failed to delete entry', error: String(err?.message || err) });
+  }
+};
+
+/**
+ * NEW: Upload/replace a section's swipe background image
+ * Route: PATCH /api/news-hub/sections/:id/background
+ * Expect: multipart/form-data with field name 'background'
+ */
+exports.updateSectionBackground = async (req, res) => {
+  const tmpPath = req.file?.path;
+  if (!tmpPath) return res.status(400).json({ message: "No file provided (field 'background')." });
+
+  try {
+    const { id } = req.params;
+
+    // Upload to Cloudinary
+    const up = await cloudinary.uploader.upload(tmpPath, {
+      resource_type: 'image',
+      folder: 'knotshorts/news-hub/section-bg',
+    });
+
+    // Save URL on section (normalize just in case)
+    const doc = await NewsHubSection.findByIdAndUpdate(
+      id,
+      { backgroundImageUrl: ensureHttp(up.secure_url) },
+      { new: true }
+    );
+    if (!doc) return res.status(404).json({ message: 'Section not found' });
+
+    res.json(doc);
+  } catch (err) {
+    console.error('❌ NewsHub updateSectionBackground error:', err);
+    res
+      .status(400)
+      .json({ message: 'Failed to update section background', error: String(err?.message || err) });
+  } finally {
+    if (tmpPath) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
   }
 };
