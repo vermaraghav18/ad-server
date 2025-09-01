@@ -1,297 +1,238 @@
 // controllers/cartoonHubController.js
 const fs = require('fs');
-const path = require('path');
-const LiveConsole = (...args) => console.log('[CartoonHub]', ...args);
-
 const CartoonHubSection = require('../models/cartoonHubSection');
 const CartoonHubEntry = require('../models/cartoonHubEntry');
 const { cloudinary } = require('../utils/cloudinary');
 
-// ---------- helpers ----------
-const toInt = (v, def = 0) => {
-  if (v === undefined || v === null || v === '') return def;
+const toInt = (v, d = 0) => {
+  if (v === undefined || v === null || v === '') return d;
   const n = parseInt(v, 10);
-  return Number.isFinite(n) ? n : def;
+  return Number.isFinite(n) ? n : d;
 };
-const toBool = (v, def = undefined) => {
-  if (v === undefined || v === null || v === '') return def;
+const toBool = (v, d = false) => {
   if (typeof v === 'boolean') return v;
-  const s = String(v).trim().toLowerCase();
-  if (['true', '1', 'yes', 'y', 'on'].includes(s)) return true;
-  if (['false', '0', 'no', 'n', 'off'].includes(s)) return false;
-  return def;
+  const s = String(v ?? '').trim().toLowerCase();
+  if (['1','true','yes','y','on'].includes(s)) return true;
+  if (['0','false','no','n','off'].includes(s)) return false;
+  return d;
 };
-const norm = (s) => String(s || '')
-  .toLowerCase()
-  .replace(/[^a-z0-9]+/g, '')
-  .trim();
 
-function matchesScope(section, type, value) {
-  // global always matches
-  if (section.scopeType === 'global') return true;
+// Accept a bunch of aliases from the admin UI
+function parseAudience(body) {
+  const kind = String(
+    body.audienceKind ??
+    body.audKind ??
+    body.targetKind ??
+    body.kind ??
+    'any'
+  ).trim().toLowerCase();
 
-  const qType = (type || '').toLowerCase();
-  const qVal = norm(value || '');
+  const value = String(
+    body.audienceValue ??
+    body.audValue ??
+    body.targetValue ??
+    body.value ??
+    ''
+  ).trim();
 
-  const sType = (section.scopeType || '').toLowerCase();
-  const sVal = norm(section.scopeValue || '');
-
-  if (!qType || !qVal) return false;
-  if (sType !== qType) return false;
-
-  // Treat "top" and "top news" as equal categories
-  const eqTop = (x) => (x === 'top' || x === 'topnews');
-  if (sType === 'category') {
-    if (eqTop(qVal) && eqTop(sVal)) return true;
-  }
-  return sVal === qVal;
+  // normalize kind
+  const k = ['category', 'state', 'city', 'any'].includes(kind) ? kind : 'any';
+  return { kind: k, value: k === 'any' ? '' : value };
 }
 
-function matchesPlacement(section, mode) {
-  const p = (section.placement || 'both').toLowerCase();
-  if (p === 'both') return true;
-  if (!mode) return true;
-  const m = mode.toLowerCase();
-  if (p === 'swipe' && m === 'swipe') return true;
-  if (p === 'scroll' && m === 'scroll') return true;
-  return false;
-}
-
-// ---------- GET /api/cartoon-hub/plan ----------
-/**
- * Returns a lightweight plan describing where to inject sections.
- * Query:
- *  - sectionType=category|state|city
- *  - sectionValue=<string>
- *  - mode=swipe|scroll  (optional, filters 'placement')
- *
- * Response: [{ sectionId, title, afterNth, repeatEvery, repeatCount, placement }]
- */
-exports.getPlan = async (req, res) => {
+/** GET /api/cartoons/sections (and alias GET /api/cartoons) */
+exports.listSections = async (_req, res) => {
   try {
-    const type = req.query.sectionType || req.query.type || '';
-    const value = req.query.sectionValue || req.query.value || '';
-    const mode = req.query.mode || '';
-
-    // enabled, sorted by placement then sortIndex
-    const sections = await CartoonHubSection.find({ enabled: true })
+    const sections = await CartoonHubSection
+      .find({})
       .sort({ placementIndex: 1, sortIndex: 1, createdAt: -1 })
       .lean();
 
-    const filtered = sections.filter(
-      (s) => matchesPlacement(s, mode) && matchesScope(s, type, value)
-    );
-
-    const plan = filtered.map((s) => ({
-      sectionId: String(s._id),
-      title: s.heading,
-      afterNth: Math.max(1, s.placementIndex || 1),
-      repeatEvery: Math.max(0, s.repeatEvery || 0),  // 0 = no repeat
-      repeatCount: Math.max(0, s.repeatCount || 0),  // 0 = unlimited
-      placement: s.placement || 'both',
-    }));
-
-    res.json(plan);
-  } catch (err) {
-    console.error('CartoonHub:getPlan error', err);
-    res.status(500).json({ error: 'Failed to build cartoon plan' });
-  }
-};
-
-// ---------- GET /api/cartoon-hub ----------
-/**
- * Full sections + entries, with the same filters as /plan.
- * Useful for admin preview or client when you need the items too.
- */
-exports.getHub = async (req, res) => {
-  try {
-    const type = req.query.sectionType || req.query.type || '';
-    const value = req.query.sectionValue || req.query.value || '';
-    const mode = req.query.mode || '';
-
-    const sections = await CartoonHubSection.find({ enabled: true })
-      .sort({ placementIndex: 1, sortIndex: 1, createdAt: -1 })
-      .lean();
-
-    const secIds = sections
-      .filter((s) => matchesPlacement(s, mode) && matchesScope(s, type, value))
-      .map((s) => s._id);
-
-    if (!secIds.length) return res.json([]);
-
-    const entries = await CartoonHubEntry.find({
-      sectionId: { $in: secIds }, enabled: true,
-    })
+    // hydrate items per section
+    const ids = sections.map(s => s._id);
+    const items = await CartoonHubEntry
+      .find({ sectionId: { $in: ids } })
       .sort({ sortIndex: 1, createdAt: -1 })
       .lean();
 
     const bySection = new Map();
-    for (const e of entries) {
-      const k = String(e.sectionId);
-      if (!bySection.has(k)) bySection.set(k, []);
-      bySection.get(k).push(e);
+    for (const it of items) {
+      const k = String(it.sectionId);
+      (bySection.get(k) ?? bySection.set(k, []).get(k)).push(it);
     }
 
-    const out = sections
-      .filter((s) => secIds.some((id) => String(id) === String(s._id)))
-      .map((s) => ({ ...s, entries: bySection.get(String(s._id)) || [] }));
-
+    const out = sections.map(s => ({ ...s, items: bySection.get(String(s._id)) || [] }));
     res.json(out);
-  } catch (err) {
-    console.error('CartoonHub:getHub error', err);
-    res.status(500).json({ error: 'Failed to fetch cartoon hub' });
+  } catch (e) {
+    console.error('cartoons:listSections error', e);
+    res.status(500).json({ message: 'Failed to load cartoon sections' });
   }
 };
 
-// ---------- Sections CRUD ----------
+/** POST /api/cartoons/sections */
 exports.createSection = async (req, res) => {
   try {
-    const {
-      name, heading,
-      placementIndex, repeatEvery, repeatCount,
-      sortIndex, enabled, placement,
-      scopeType, scopeValue,
-    } = req.body;
-
-    if (!name || !heading || !placementIndex) {
-      return res.status(400).json({ error: 'name, heading, placementIndex are required' });
+    const { name, heading } = req.body;
+    if (!name || !heading) {
+      return res.status(400).json({ message: 'name and heading are required' });
     }
+
+    const { kind, value } = parseAudience(req.body);
 
     const doc = await CartoonHubSection.create({
       name: String(name).trim(),
       heading: String(heading).trim(),
-      placementIndex: Math.max(1, toInt(placementIndex, 1)),
-      repeatEvery: Math.max(0, toInt(repeatEvery, 0)),
-      repeatCount: Math.max(0, toInt(repeatCount, 0)),
-      sortIndex: toInt(sortIndex, 0),
-      enabled: toBool(enabled, true),
-      placement: (placement || 'both').toLowerCase(),
-      scopeType: (scopeType || 'global').toLowerCase(),
-      scopeValue: String(scopeValue || '').trim(),
+      placementIndex: Math.max(1, toInt(req.body.placementIndex, 1)),
+      sortIndex: toInt(req.body.sortIndex, 0),
+      repeatEvery: Math.max(0, toInt(req.body.repeatEvery, 0)),
+      enabled: toBool(req.body.enabled, true),
+      audience: { kind, value },  // <-- tolerant audience
     });
 
     res.status(201).json(doc);
-  } catch (err) {
-    console.error('CartoonHub:createSection error', err);
-    res.status(400).json({ error: 'Failed to create section', detail: String(err?.message || err) });
+  } catch (e) {
+    console.error('cartoons:createSection error', e);
+    res.status(400).json({ message: 'Failed to create section' });
   }
 };
 
+/** PATCH /api/cartoons/sections/:id */
 exports.updateSection = async (req, res) => {
   try {
-    const { id } = req.params;
-    const u = {};
-    if (req.body.name != null) u.name = String(req.body.name).trim();
-    if (req.body.heading != null) u.heading = String(req.body.heading).trim();
+    const updates = {};
+    if (req.body.name != null) updates.name = String(req.body.name).trim();
+    if (req.body.heading != null) updates.heading = String(req.body.heading).trim();
+    if (req.body.placementIndex != null) updates.placementIndex = Math.max(1, toInt(req.body.placementIndex, 1));
+    if (req.body.sortIndex != null) updates.sortIndex = toInt(req.body.sortIndex, 0);
+    if (req.body.repeatEvery != null) updates.repeatEvery = Math.max(0, toInt(req.body.repeatEvery, 0));
+    if (req.body.enabled != null) updates.enabled = toBool(req.body.enabled);
 
-    if (req.body.placementIndex != null) u.placementIndex = Math.max(1, toInt(req.body.placementIndex, 1));
-    if (req.body.repeatEvery != null) u.repeatEvery = Math.max(0, toInt(req.body.repeatEvery, 0));
-    if (req.body.repeatCount != null) u.repeatCount = Math.max(0, toInt(req.body.repeatCount, 0));
-    if (req.body.sortIndex != null) u.sortIndex = toInt(req.body.sortIndex, 0);
-    if (req.body.enabled != null) u.enabled = toBool(req.body.enabled, true);
-
-    if (req.body.placement != null) u.placement = String(req.body.placement).trim().toLowerCase();
-    if (req.body.scopeType != null) u.scopeType = String(req.body.scopeType).trim().toLowerCase();
-    if (req.body.scopeValue != null) u.scopeValue = String(req.body.scopeValue).trim();
-
-    const doc = await CartoonHubSection.findByIdAndUpdate(id, u, { new: true });
-    if (!doc) return res.status(404).json({ error: 'Section not found' });
-    res.json(doc);
-  } catch (err) {
-    console.error('CartoonHub:updateSection error', err);
-    res.status(400).json({ error: 'Failed to update section', detail: String(err?.message || err) });
-  }
-};
-
-exports.deleteSection = async (req, res) => {
-  try {
-    const { id } = req.params;
-    await CartoonHubEntry.deleteMany({ sectionId: id });
-    const ok = await CartoonHubSection.findByIdAndDelete(id);
-    if (!ok) return res.status(404).json({ error: 'Section not found' });
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('CartoonHub:deleteSection error', err);
-    res.status(400).json({ error: 'Failed to delete section' });
-  }
-};
-
-// ---------- Entries CRUD ----------
-/**
- * POST /api/cartoon-hub/sections/:id/entries
- * Accept either:
- *   - body.imageUrl (direct HTTPS/Cloudinary URL), OR
- *   - multipart file under field 'media' (will upload to Cloudinary)
- * Optional: caption, sortIndex, enabled
- */
-exports.createEntry = async (req, res) => {
-  const tmpPath = req.file?.path;
-  try {
-    const { id: sectionId } = req.params;
-    const section = await CartoonHubSection.findById(sectionId);
-    if (!section) return res.status(404).json({ error: 'Section not found' });
-
-    let imageUrl = String(req.body.imageUrl || '').trim();
-    if (!imageUrl && !req.file) {
-      return res.status(400).json({ error: "Provide 'imageUrl' or upload a file under field 'media'." });
+    // audience (accept same aliases on update)
+    if (
+      req.body.audienceKind != null || req.body.audKind != null ||
+      req.body.targetKind != null || req.body.kind != null ||
+      req.body.audienceValue != null || req.body.audValue != null ||
+      req.body.targetValue != null || req.body.value != null
+    ) {
+      const { kind, value } = parseAudience(req.body);
+      updates.audience = { kind, value };
     }
 
-    if (req.file) {
-      // upload to Cloudinary
-      const upload = await cloudinary.uploader.upload(req.file.path, {
+    const doc = await CartoonHubSection.findByIdAndUpdate(req.params.id, updates, { new: true });
+    if (!doc) return res.status(404).json({ message: 'Section not found' });
+    res.json(doc);
+  } catch (e) {
+    console.error('cartoons:updateSection error', e);
+    res.status(400).json({ message: 'Failed to update section' });
+  }
+};
+
+/** DELETE /api/cartoons/sections/:id */
+exports.deleteSection = async (req, res) => {
+  try {
+    const id = req.params.id;
+    await CartoonHubEntry.deleteMany({ sectionId: id });
+    await CartoonHubSection.findByIdAndDelete(id);
+    res.sendStatus(204);
+  } catch (e) {
+    console.error('cartoons:deleteSection error', e);
+    res.status(400).json({ message: 'Failed to delete section' });
+  }
+};
+
+/** POST /api/cartoons/sections/:id/items (image via 'media' or cloudinaryUrl) */
+exports.createItem = async (req, res) => {
+  const tmp = req.file?.path;
+  try {
+    const sectionId = req.params.id;
+    const s = await CartoonHubSection.findById(sectionId);
+    if (!s) return res.status(404).json({ message: 'Section not found' });
+
+    let imageUrl = (req.body.cloudinaryUrl || '').trim();
+    if (!imageUrl) {
+      if (!req.file) return res.status(400).json({ message: "Provide 'cloudinaryUrl' or upload a file as 'media'." });
+      const type = req.file.mimetype || '';
+      if (!type.startsWith('image/')) {
+        return res.status(400).json({ message: 'Only images are supported.' });
+      }
+      const up = await cloudinary.uploader.upload(req.file.path, {
         folder: 'knotshorts/cartoons',
         resource_type: 'image',
       });
-      imageUrl = String(upload.secure_url || '').trim();
+      imageUrl = String(up.secure_url || '').trim();
     }
 
-    if (!/^https?:\/\//i.test(imageUrl)) {
-      return res.status(400).json({ error: 'imageUrl must be an HTTP/HTTPS URL' });
-    }
-
-    const entry = await CartoonHubEntry.create({
+    const item = await CartoonHubEntry.create({
       sectionId,
       imageUrl,
-      caption: String(req.body.caption || '').trim(),
+      caption: String(req.body.caption ?? '').trim(),
       sortIndex: toInt(req.body.sortIndex, 0),
       enabled: toBool(req.body.enabled, true),
     });
 
-    res.status(201).json(entry);
-  } catch (err) {
-    console.error('CartoonHub:createEntry error', err);
-    res.status(400).json({ error: 'Failed to create entry', detail: String(err?.message || err) });
+    res.status(201).json(item);
+  } catch (e) {
+    console.error('cartoons:createItem error', e);
+    res.status(400).json({ message: 'Failed to create item' });
   } finally {
-    if (tmpPath) try { fs.unlinkSync(tmpPath); } catch {}
+    if (tmp) try { fs.unlinkSync(tmp); } catch {}
   }
 };
 
-exports.updateEntry = async (req, res) => {
+/** PATCH /api/cartoons/items/:itemId */
+exports.updateItem = async (req, res) => {
   try {
-    const { entryId } = req.params;
-    const u = {};
-    if (req.body.imageUrl != null) u.imageUrl = String(req.body.imageUrl).trim();
-    if (req.body.caption != null) u.caption = String(req.body.caption).trim();
-    if (req.body.sortIndex != null) u.sortIndex = toInt(req.body.sortIndex, 0);
-    if (req.body.enabled != null) u.enabled = toBool(req.body.enabled, true);
-
-    const doc = await CartoonHubEntry.findByIdAndUpdate(entryId, u, { new: true });
-    if (!doc) return res.status(404).json({ error: 'Entry not found' });
+    const updates = {};
+    if (req.body.caption != null) updates.caption = String(req.body.caption).trim();
+    if (req.body.enabled != null) updates.enabled = toBool(req.body.enabled);
+    if (req.body.sortIndex != null) updates.sortIndex = toInt(req.body.sortIndex, 0);
+    const doc = await CartoonHubEntry.findByIdAndUpdate(req.params.itemId, updates, { new: true });
+    if (!doc) return res.status(404).json({ message: 'Item not found' });
     res.json(doc);
-  } catch (err) {
-    console.error('CartoonHub:updateEntry error', err);
-    res.status(400).json({ error: 'Failed to update entry', detail: String(err?.message || err) });
+  } catch (e) {
+    console.error('cartoons:updateItem error', e);
+    res.status(400).json({ message: 'Failed to update item' });
   }
 };
 
-exports.deleteEntry = async (req, res) => {
+/** DELETE /api/cartoons/items/:itemId */
+exports.deleteItem = async (req, res) => {
   try {
-    const { entryId } = req.params;
-    const ok = await CartoonHubEntry.findByIdAndDelete(entryId);
-    if (!ok) return res.status(404).json({ error: 'Entry not found' });
-    res.json({ ok: true });
-  } catch (err) {
-    console.error('CartoonHub:deleteEntry error', err);
-    res.status(400).json({ error: 'Failed to delete entry' });
+    await CartoonHubEntry.findByIdAndDelete(req.params.itemId);
+    res.sendStatus(204);
+  } catch (e) {
+    console.error('cartoons:deleteItem error', e);
+    res.status(400).json({ message: 'Failed to delete item' });
+  }
+};
+
+/** (Optional) GET /api/cartoons/feed-plan?section=category:Top%20News&mode=swipe */
+exports.feedPlan = async (req, res) => {
+  try {
+    const mode = (req.query.mode || 'swipe').toString().toLowerCase(); // swipe|scroll
+    const [kind, valueRaw] = (req.query.section || 'category:top').split(':', 2);
+    const value = (valueRaw || '').trim();
+    const audKind = (kind || 'category').trim().toLowerCase();
+
+    const q = { enabled: true };
+    if (['category', 'state', 'city'].includes(audKind)) {
+      q['audience.kind'] = audKind;
+      q['audience.value'] = value;
+    } else {
+      q['audience.kind'] = 'any';
+    }
+
+    const secs = await CartoonHubSection.find(q).sort({ placementIndex: 1, sortIndex: 1 }).lean();
+    const plans = secs.map(s => ({
+      sectionId: String(s._id),
+      title: s.heading,
+      afterNth: s.placementIndex,
+      repeatEvery: s.repeatEvery || 0,
+      placement: 'both',
+    }));
+    res.json(plans);
+  } catch (e) {
+    console.error('cartoons:feedPlan error', e);
+    res.status(400).json({ message: 'Failed to build feed plan' });
   }
 };
