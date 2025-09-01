@@ -1,4 +1,4 @@
-// ad-server/models/cartoonHubEntry.js
+// models/cartoonHubEntry.js
 const mongoose = require('mongoose');
 const { Schema } = mongoose;
 

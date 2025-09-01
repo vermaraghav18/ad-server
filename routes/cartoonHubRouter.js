@@ -1,52 +1,50 @@
-// ad-server/routes/cartoonHubRouter.js
+// routes/cartoonHubRouter.js
 const express = require('express');
-const os = require('os');
-const path = require('path');
 const multer = require('multer');
-const {
-  getHub,
-  createSection,
-  updateSection,
-  deleteSection,
-  createEntry,
-  updateEntry,
-  deleteEntry,
-} = require('../controllers/cartoonHubController');
+const os = require('os');
+
+const controller = require('../controllers/cartoonHubController');
+
+// Store temp uploads in the OS temp dir (controller will push to Cloudinary)
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, os.tmpdir()),
+    filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`),
+  }),
+});
 
 const router = express.Router();
 
-// Multer: temp storage in OS tmpdir; image-only; size limit
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => cb(null, os.tmpdir()),
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname || '');
-    cb(null, `cartoon_${Date.now()}${ext}`);
-  },
-});
-const fileFilter = (_req, file, cb) => {
-  if (!file?.mimetype) return cb(null, false);
-  if (file.mimetype.startsWith('image/')) return cb(null, true);
-  cb(new Error('Only image uploads are allowed'), false);
-};
-const MAX_MB = parseInt(process.env.MAX_UPLOAD_MB || '3', 10);
-const upload = multer({
-  storage,
-  fileFilter,
-  limits: { fileSize: MAX_MB * 1024 * 1024 },
-});
+/**
+ * GET /api/cartoon-hub/plan
+ * Build a lightweight placement plan filtered by:
+ *   - sectionType=global|category|state|city
+ *   - sectionValue=<string>        (e.g. "Top News", "Punjab", "Mumbai")
+ *   - mode=swipe|scroll            (optional; filters 'placement')
+ */
+router.get('/plan', controller.getPlan);
 
-// Public GET
-router.get('/', getHub);
+/**
+ * GET /api/cartoon-hub
+ * Return full sections + entries with the same filters as /plan.
+ */
+router.get('/', controller.getHub);
 
-// Sections CRUD
-router.post('/sections', createSection);
-router.patch('/sections/:id', updateSection);
-router.delete('/sections/:id', deleteSection);
+/**
+ * Sections CRUD
+ */
+router.post('/sections', controller.createSection);
+router.patch('/sections/:id', controller.updateSection);
+router.delete('/sections/:id', controller.deleteSection);
 
-// Entries CRUD
-// NOTE: this accepts BOTH: multipart with file "media" OR multipart with only "imageUrl"
-router.post('/sections/:id/entries', upload.single('media'), createEntry);
-router.patch('/entries/:entryId', updateEntry);
-router.delete('/entries/:entryId', deleteEntry);
+/**
+ * Entries CRUD
+ * - Create supports either:
+ *    • multipart upload under field 'media', OR
+ *    • JSON body with { imageUrl: "https://..." }
+ */
+router.post('/sections/:id/entries', upload.single('media'), controller.createEntry);
+router.patch('/entries/:entryId', controller.updateEntry);
+router.delete('/entries/:entryId', controller.deleteEntry);
 
 module.exports = router;
