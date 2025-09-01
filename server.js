@@ -52,13 +52,9 @@ const rssAggRouter = require('./routes/rssAggRouter');
 const bannerConfigRouter = require('./routes/bannerConfigRouter');
 const featureBannerGroupRouter = require('./routes/featureBannerGroupRouter');
 
-// ✅ NEW: Cartoon Hub (sections + items + plan)
-const cartoonHubRouter = require('./routes/cartoonHubRouter');
-
-// ❌ REMOVE legacy cartoons router import
-// const cartoonRouter = require('./routes/cartoonRouter');
-
 const sectionsRouter = require('./routes/sectionsRouter');
+
+const cartoonRouter = require('./routes/cartoonRouter');
 
 const { get: outboundGet } = require('./request');
 const connectDB = require('./db');
@@ -137,11 +133,8 @@ app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
 app.use('/api/feature-banner-groups', featureBannerGroupRouter);
 
-// ✅ Mount NEW Cartoon Hub at the path your admin expects
-app.use('/api/cartoons', cartoonHubRouter);
+app.use('/api/cartoons', cartoonRouter);
 
-// (Optional) keep an alias for clarity/back-compat
-app.use('/api/cartoon-hub', cartoonHubRouter);
 
 app.use('/api/sections', sectionsRouter);
 
@@ -190,8 +183,6 @@ app.listen(PORT, () => {
   console.log('   • /api/rss-agg  (cached 30s)');
   console.log('   • /api/banner-configs');
   console.log('   • /api/feature-banner-groups');
-  console.log('   • /api/cartoons  (Cartoon Hub)');
-  console.log('   • /api/cartoon-hub (alias)');
   console.log('   • /api/sections');
   console.log('   • /api/_probe  (optional outbound tester)');
 });
