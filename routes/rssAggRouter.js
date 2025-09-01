@@ -59,8 +59,32 @@ const CTA_HEADLINE = process.env.RSS_AGG_CTA_HEADLINE || 'Tap to read more';
 
 /* -------------------- in-memory cache -------------------- */
 const cache = Object.create(null);
-const now = () => Date.now();
-const keyFor = (category) => (category || '').trim().toLowerCase() || '__all__';
+
+function now() { return Date.now(); }
+function keyFor(category) {
+  return (category || '').trim().toLowerCase() || '__all__';
+}
+
+function normalizeSection(s) {
+  const v = String(s || '').trim().toLowerCase();
+  // treat Top tab aliases as 'top'
+  if (!v || v === 'top news' || v === 'topnews' || v === 'home' || v === 'all') return 'top';
+  return v;
+}
+
+function bannerMatchesSection(b, sectionRaw) {
+  const section = normalizeSection(sectionRaw);
+  const t = b.targets || {};
+  // global if includeAll not set/true (back-compat)
+  if (t.includeAll === true || t.includeAll === undefined) return true;
+
+  const normList = (arr) => Array.isArray(arr) ? arr.map(x => normalizeSection(x)) : [];
+  const inList  = (arr) => normList(arr).includes(section);
+
+  // match any of the three target types
+  return inList(t.categories) || inList(t.cities) || inList(t.states);
+}
+
 
 /* -------------------- helpers -------------------- */
 function sha1(s) {
@@ -68,6 +92,7 @@ function sha1(s) {
 }
 
 function stableArticleId(entry, feedUrl) {
+  // Prefer link, then guid, else title+feed fallback
   const link = (entry.link || '').trim();
   const guid = (entry.guid || '').toString().trim();
   const title = (entry.title || '').trim();
@@ -82,7 +107,7 @@ function dedupe(items) {
     const link = (a.link || '').trim();
     const title = (a.title || '').trim();
     const key = DEDUPE_BY === 'link' ? link : (link || title);
-    if (!key) { out.push(a); continue; }
+    if (!key) { out.push(a); continue; } // keep if no key
     if (!seen.has(key)) { seen.add(key); out.push(a); }
   }
   return out;
@@ -121,14 +146,14 @@ function toArticle(entry, feedTitle, feedUrl, forcedCategory = '') {
   const id = stableArticleId(entry, feedUrl);
 
   return {
-    id,
+    id, // ✅ stable id
     title,
     description: desc,
     summary: desc,
     link,
     imageUrl,
     source: feedTitle || '',
-    category: forcedCategory || '',
+    category: forcedCategory || '', // ✅ helps category fallbacks
     author: entry.creator || entry.author || '',
     publishedAt,
     parsedDate: publishedAt,
@@ -137,8 +162,9 @@ function toArticle(entry, feedTitle, feedUrl, forcedCategory = '') {
   };
 }
 
-// IMPORTANT: match by category/label/name/city/state (admin feeds)
+// IMPORTANT: match by category/label/name/city/state
 async function getFeedUrls(category) {
+  // Fetch all feeds and filter locally so we can match on city/state too.
   const params = new URLSearchParams({ page: '1', pageSize: '500' });
   const url = `${SELF_BASE}/api/feeds?${params.toString()}`;
 
@@ -155,10 +181,11 @@ async function getFeedUrls(category) {
     const u = (row.url || '').toString().trim();
     if (!u) continue;
 
+    // fields considered for matching the requested "category"
     const fields = [
       row.category,  // e.g. "Finance"
       row.label,     // e.g. "Ahmedabad"
-      row.name,
+      row.name,      // sometimes used
       row.city,      // e.g. "Bengaluru"
       row.state,     // e.g. "Karnataka"
     ]
@@ -177,6 +204,7 @@ function isWordPressLike(u) {
 }
 
 function makePagedVariants(u, maxPage) {
+  // WP typically supports: /feed/?paged=2  or ?paged=2
   const out = [];
   for (let p = 2; p <= maxPage; p++) {
     if (/\?/.test(u)) {
@@ -194,7 +222,7 @@ async function fetchSingle(u) {
   try {
     const feed = await parser.parseURL(u);
     const title = feed.title || '';
-    const items = (feed.items || []).map((it) => toArticle(it, title, u));
+    const items = (feed.items || []).map((it) => toArticle(it, title, u /* feedUrl */));
     return items;
   } catch (e) {
     console.error('[rss-agg] feed fail:', u, e.message || e);
@@ -203,18 +231,25 @@ async function fetchSingle(u) {
 }
 
 async function fetchOneFeedAll(u, perFeedLimit, forcedCategory = '') {
+  // First page
   let items = await fetchSingle(u);
   if (forcedCategory) {
     items = items.map(a => ({ ...a, category: forcedCategory }));
   }
+
+  // Extra pages (older posts) for WordPress-like feeds
   if (EXTRA_PAGES > 0 && isWordPressLike(u)) {
-    const variants = makePagedVariants(u, EXTRA_PAGES + 1);
+    const variants = makePagedVariants(u, EXTRA_PAGES + 1); // adds paged=2..N
     for (const v of variants) {
       let more = await fetchSingle(v);
-      if (forcedCategory) more = more.map(a => ({ ...a, category: forcedCategory }));
+      if (forcedCategory) {
+        more = more.map(a => ({ ...a, category: forcedCategory }));
+      }
       items.push(...more);
     }
   }
+
+  // Trim per-feed
   return items.slice(0, perFeedLimit);
 }
 
@@ -262,40 +297,31 @@ async function rebuildCategory(category) {
   }
 }
 
-/* ---------- helper: does a banner apply to this section? ---------- */
-function bannerMatchesSection(b, sectionRaw) {
-  const section = (sectionRaw || '').toString().trim().toLowerCase();
-  const t = b.targets || {};
-  // Back-compat: if targets missing or includeAll === true/undefined -> global
-  if (t.includeAll === true || t.includeAll === undefined) return true;
 
-  const has = (arr) =>
-    Array.isArray(arr) && arr.map(x => String(x || '').trim().toLowerCase()).includes(section);
-
-  return has(t.categories) || has(t.cities) || has(t.states);
-}
-
-/** Resolve banner injections against the given article list. */
+/** Resolve banner injections against the given article list.
+ *  Supports new `anchor` shape, plus legacy: startAfter/repeatEvery/customNewsId/imageUrl.
+ */
 async function resolveInjections(articles, category) {
   if (!BannerConfig) return [];
   const nowDt = new Date();
 
-  // Load active configs
+  // Load active configs (prefer more specific, then higher priority)
   let banners = await BannerConfig.find({
-    $and: [
-      { $or: [{ isActive: { $exists: false } }, { isActive: true }] },
-      { $or: [{ activeFrom: { $exists: false } }, { activeFrom: { $lte: nowDt } }] },
-      { $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gte: nowDt } }] },
-    ],
-  })
-    .sort({ specificityLevel: -1, priority: -1 })
-    .lean();
+  $and: [
+    { $or: [{ isActive: { $exists: false } }, { isActive: true }] },
+    { $or: [{ activeFrom: { $exists: false } }, { activeFrom: { $lte: nowDt } }] },
+    { $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gte: nowDt } }] },
+  ],
+})
+  // more specific (city/state/category) wins over global; then priority
+  .sort({ specificityLevel: -1, priority: -1 })
+  .lean();
 
-  // 🔒 Filter by section targeting (categories/cities/states)
-  const section = (category || '').toString().trim().toLowerCase();
-  banners = banners.filter(b => bannerMatchesSection(b, section));
+// keep only banners that target THIS section
+const section = normalizeSection(category);
+banners = banners.filter(b => bannerMatchesSection(b, section));
+if (!banners.length) return [];
 
-  if (!banners.length) return [];
 
   // optional: resolve CustomNews docs for payloads (only if model file exists)
   const CustomNews = safeRequire(path.join(__dirname, '..', 'models', 'customNews'));
@@ -308,6 +334,7 @@ async function resolveInjections(articles, category) {
   let newsDocsById = new Map();
   if (CustomNews && newsIdSet.size) {
     const docs = await CustomNews.find({ _id: { $in: Array.from(newsIdSet) } })
+      // include topic for fallback
       .select('title headline imageUrl thumbUrl link url slug deeplink topic createdAt updatedAt')
       .lean();
     newsDocsById = new Map(docs.map(d => [String(d._id), d]));
@@ -322,9 +349,11 @@ async function resolveInjections(articles, category) {
 
   const injections = [];
 
+  // ---------- build injection with topic propagation ----------
   const pushInjection = (afterId, bannerDoc, topicForCustom) => {
     const mode = bannerDoc.mode || bannerDoc.type || (bannerDoc.customNewsId ? 'news' : 'ad');
 
+    // Start from structured payload if present
     const basePayload = bannerDoc.payload && Object.keys(bannerDoc.payload).length
       ? { ...bannerDoc.payload }
       : null;
@@ -332,6 +361,7 @@ async function resolveInjections(articles, category) {
     let payload = basePayload || {};
 
     if (!basePayload) {
+      // synthesize from legacy fields
       if (mode === 'ad') {
         payload = {
           imageUrl: bannerDoc.imageUrl,
@@ -346,6 +376,7 @@ async function resolveInjections(articles, category) {
           clickUrl: doc?.url || doc?.link,
           deeplinkUrl: doc?.deeplink,
           customNewsId: nid || undefined,
+          // fallback from the CustomNews doc if nothing else given
           topic: (doc?.topic || '').toString().trim().toLowerCase() || undefined,
         };
       } else {
@@ -353,6 +384,7 @@ async function resolveInjections(articles, category) {
       }
     }
 
+    // Normalize/ensure topic on payload
     const nid = String(payload.customNewsId || bannerDoc.customNewsId || '');
     const doc  = nid && newsDocsById.get(nid);
     const topicFromBanner = (payload.topic || bannerDoc.topic || '').toString().trim().toLowerCase();
@@ -368,12 +400,14 @@ async function resolveInjections(articles, category) {
         mode,
         payload,
         priority: Number(bannerDoc.priority ?? 100),
+        specificityLevel: Number(bannerDoc.specificityLevel ?? 0),
       },
     });
   };
 
   for (const b of banners) {
     const anchor = b.anchor || {};
+    // resolve anchor kind with back-compat to legacy slot fields
     const kind =
       anchor.kind ||
       b.anchorKind ||
@@ -388,24 +422,26 @@ async function resolveInjections(articles, category) {
       .toString()
       .toLowerCase();
 
+    // slot parameters (supports legacy startAfter/repeatEvery)
     const nth = Number(anchor.nth ?? (b.startAfter ? Math.max(1, b.startAfter) : 10));
     const every = Number(b.repeatEvery || null) || null;
 
     if (kind === 'article' && articleKey && idxById.has(articleKey)) {
-      pushInjection(articleKey, b, anchorCat);
+      pushInjection(articleKey, b, anchorCat);               // ← pass topic
       continue;
     }
 
     if (kind === 'category' && anchorCat && topIdxByCat.has(anchorCat)) {
       const topIdx = topIdxByCat.get(anchorCat);
-      pushInjection(articles[topIdx].id, b, anchorCat);
+      pushInjection(articles[topIdx].id, b, anchorCat);      // ← pass topic
       continue;
     }
 
     if (kind === 'slot') {
-      let pos = Math.max(1, nth) - 1; // 0-based
+      // one or multiple injections: after nth, then every 'every' cards
+      let pos = Math.max(1, nth) - 1; // convert to 0-based
       while (pos < articles.length) {
-        pushInjection(articles[pos].id, b, anchorCat);
+        pushInjection(articles[pos].id, b, anchorCat);       // ← pass topic
         if (!every) break;
         pos += Math.max(1, every);
       }
@@ -413,11 +449,16 @@ async function resolveInjections(articles, category) {
     }
   }
 
-  // de-conflict: keep highest priority per afterId
+  // de-conflict: keep the most specific, then highest priority, per afterId
   const byAfterId = new Map();
   for (const inj of injections) {
     const prev = byAfterId.get(inj.afterId);
-    if (!prev || inj.banner.priority > prev.banner.priority) {
+    if (
+      !prev ||
+      inj.banner.specificityLevel > prev.banner.specificityLevel ||
+      (inj.banner.specificityLevel === prev.banner.specificityLevel &&
+        inj.banner.priority > prev.banner.priority)
+    ) {
       byAfterId.set(inj.afterId, inj);
     }
   }
@@ -431,6 +472,7 @@ router.get('/', async (req, res) => {
     const page = Math.max(1, parseInt(req.query.page || '1', 10));
     const pageSize = Math.max(1, Math.min(2000, parseInt(req.query.pageSize || '20', 10)));
 
+    // allow per-request overrides (optional)
     if (req.query.perFeedLimit) {
       process.env.RSS_AGG_PER_FEED_LIMIT = String(parseInt(req.query.perFeedLimit, 10) || PER_FEED_LIMIT);
     }
@@ -452,6 +494,8 @@ router.get('/', async (req, res) => {
     const start = (page - 1) * pageSize;
     const slice = items.slice(start, start + pageSize);
 
+    // Resolve injections against the full list (so the anchor is deterministic),
+    // then filter to the current page (only inject where the afterId appears on this page).
     const allInjections = await resolveInjections(items, category);
     const sliceIds = new Set(slice.map(a => a.id));
     const pageInjections = allInjections.filter(inj => sliceIds.has(inj.afterId));
@@ -466,10 +510,12 @@ router.get('/', async (req, res) => {
           afterId: a.id,
           banner: {
             id: `cta:${a.id}`,
-            mode: 'news',
-            priority: 0,
+            mode: 'news',           // client renders blurred article bg + headline
+            priority: 0,            // never overrides real ads/news
+            specificityLevel: -1,   // always lowest
             payload: {
               headline: CTA_HEADLINE,
+              // optional topic hint
               topic: (a.category || '').toString().trim().toLowerCase() || undefined,
             },
           },
@@ -478,8 +524,8 @@ router.get('/', async (req, res) => {
     }
 
     res.json({
-      items: slice,
-      injections: mergedInjections,
+      items: slice,                 // ✅ unchanged for backwards-compat
+      injections: mergedInjections, // ✅ ads per admin + CTA for the rest
       total: items.length,
       updatedAt: entry ? entry.updatedAt : 0,
       stale: STALE,
