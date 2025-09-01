@@ -288,7 +288,7 @@ async function resolveInjections(articles, category) {
       { $or: [{ activeTo: { $exists: false } }, { activeTo: null }, { activeTo: { $gte: nowDt } }] },
     ],
   })
-    .sort({ priority: -1 })
+    .sort({ specificityLevel: -1, priority: -1 })
     .lean();
 
   // 🔒 Filter by section targeting (categories/cities/states)
