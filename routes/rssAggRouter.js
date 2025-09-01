@@ -53,6 +53,10 @@ const WARM_CATS = (process.env.RSS_AGG_WARM_CATEGORIES || '')
   .map((s) => s.trim())
   .filter(Boolean);
 
+// NEW: CTA fallback controls
+const ENABLE_CTA_FALLBACK = (process.env.RSS_AGG_ENABLE_CTA_FALLBACK || 'true') === 'true';
+const CTA_HEADLINE = process.env.RSS_AGG_CTA_HEADLINE || 'Tap to read more';
+
 /* -------------------- in-memory cache -------------------- */
 const cache = Object.create(null);
 
@@ -80,8 +84,8 @@ function dedupe(items) {
   const seen = new Set();
   for (const a of items) {
     const link = (a.link || '').trim();
-    const title = (a.title || '').trim();
-    const key = DEDUPE_BY === 'link' ? link : (link || title);
+    theTitle = (a.title || '').trim();
+    const key = DEDUPE_BY === 'link' ? link : (link || theTitle);
     if (!key) { out.push(a); continue; } // keep if no key
     if (!seen.has(key)) { seen.add(key); out.push(a); }
   }
@@ -463,9 +467,33 @@ router.get('/', async (req, res) => {
     const sliceIds = new Set(slice.map(a => a.id));
     const pageInjections = allInjections.filter(inj => sliceIds.has(inj.afterId));
 
+    // NEW: Add CTA fallback for every article in this page slice that lacks an injection.
+    // Keeps placement identical by using the same "afterId" mechanism and news-mode payload.
+    let mergedInjections = pageInjections;
+    if (ENABLE_CTA_FALLBACK) {
+      const alreadyInjected = new Set(pageInjections.map(i => i.afterId));
+      const fallback = slice
+        .filter(a => !alreadyInjected.has(a.id))
+        .map(a => ({
+          afterId: a.id,
+          banner: {
+            id: `cta:${a.id}`,            // deterministic id per article
+            mode: 'news',                 // renders blurred article image + text in client
+            priority: 0,                  // lower than any configured banner
+            payload: {
+              headline: CTA_HEADLINE,     // text shown over the blurred background
+              // topic helps in-app filters if you ever use it; harmless otherwise
+              topic: (a.category || '').toString().trim().toLowerCase() || undefined,
+              // no click/deeplink => client falls back to the article link
+            },
+          },
+        }));
+      mergedInjections = pageInjections.concat(fallback);
+    }
+
     res.json({
-      items: slice,                 // ✅ unchanged for backwards-compat
-      injections: pageInjections,   // ✅ now includes payload.topic when applicable
+      items: slice,               // ✅ unchanged for backwards-compat
+      injections: mergedInjections,
       total: items.length,
       updatedAt: entry ? entry.updatedAt : 0,
       stale: STALE,
