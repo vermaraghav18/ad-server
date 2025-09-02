@@ -143,6 +143,7 @@ app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
 app.use('/api/feature-banner-groups', featureBannerGroupRouter);
 app.use('/api/geo-ads', geoAdsRouter);
+app.use('/api/cartoons', cartoonRouter);
 
 // ✅ Spotlight MUST live under /api to match admin & app fetchers
 app.use('/api/spotlights', spotlightRouter);
