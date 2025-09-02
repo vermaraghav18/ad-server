@@ -143,7 +143,7 @@ app.use('/api/feature-banner-groups', featureBannerGroupRouter);
 
 // ✅ Spotlight MUST live under /api to match admin & app fetchers
 app.use('/api/spotlights', spotlightRouter);
-
+app.use('/spotlights', spotlightRouter);
 app.use('/api/cartoons', cartoonRouter);
 app.use('/api/sections', sectionsRouter);
 
