@@ -56,6 +56,8 @@ const spotlightRouter = require('./routes/spotlightRouter');// ✅ use this vari
 const sectionsRouter = require('./routes/sectionsRouter');
 const cartoonRouter = require('./routes/cartoonRouter');
 
+const geoAdsRouter = require('./routes/geoAdsRouter');
+
 const { get: outboundGet } = require('./request');
 const connectDB = require('./db');
 
@@ -140,6 +142,7 @@ app.use('/api/live-update-hub', liveUpdateHubRouter);
 app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
 app.use('/api/feature-banner-groups', featureBannerGroupRouter);
+app.use('/api/geo-ads', geoAdsRouter);
 
 // ✅ Spotlight MUST live under /api to match admin & app fetchers
 app.use('/api/spotlights', spotlightRouter);
