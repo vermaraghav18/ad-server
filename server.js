@@ -51,9 +51,9 @@ const liveUpdateHubRouter = require('./routes/liveUpdateHubRouter');
 const rssAggRouter = require('./routes/rssAggRouter');
 const bannerConfigRouter = require('./routes/bannerConfigRouter');
 const featureBannerGroupRouter = require('./routes/featureBannerGroupRouter');
+const spotlightRouter = require('./routes/spotlightRouter'); // ✅ use this variable (don’t re-require inline)
 
 const sectionsRouter = require('./routes/sectionsRouter');
-
 const cartoonRouter = require('./routes/cartoonRouter');
 
 const { get: outboundGet } = require('./request');
@@ -67,9 +67,17 @@ function parseAllowlist(input) {
   return (input || '').split(',').map((s) => s.trim()).filter(Boolean);
 }
 const allowlist = parseAllowlist(process.env.CORS_ORIGINS);
-if (!allowlist.includes('http://localhost:3000')) {
-  allowlist.push('http://localhost:3000');
+
+// sensible local defaults for CRA (3000) and Vite (5173)
+for (const origin of [
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+]) {
+  if (!allowlist.includes(origin)) allowlist.push(origin);
 }
+
 function matchesOrigin(origin, entry) {
   if (!origin) return true;
   try {
@@ -133,9 +141,10 @@ app.use('/api/rss-agg', cache('30 seconds'), rssAggRouter);
 app.use('/api/banner-configs', bannerConfigRouter);
 app.use('/api/feature-banner-groups', featureBannerGroupRouter);
 
+// ✅ Spotlight MUST live under /api to match admin & app fetchers
+app.use('/api/spotlights', spotlightRouter);
+
 app.use('/api/cartoons', cartoonRouter);
-
-
 app.use('/api/sections', sectionsRouter);
 
 /* -------- Optional probe for outbound debugging ---------- */
@@ -183,6 +192,8 @@ app.listen(PORT, () => {
   console.log('   • /api/rss-agg  (cached 30s)');
   console.log('   • /api/banner-configs');
   console.log('   • /api/feature-banner-groups');
+  console.log('   • /api/spotlights'); // ✅ added
+  console.log('   • /api/cartoons');
   console.log('   • /api/sections');
   console.log('   • /api/_probe  (optional outbound tester)');
 });
