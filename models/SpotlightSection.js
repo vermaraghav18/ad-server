@@ -1,54 +1,49 @@
-// ad-server/models/SpotlightSection.js
+// models/SpotlightSection.js
 const mongoose = require('mongoose');
+
+const BgSchema = new mongoose.Schema(
+  {
+    mode: { type: String, enum: ['image', 'color', 'none'], default: 'image' },
+    imageUrl: { type: String, default: '' },
+    color: { type: String, default: '' },
+    overlay: { type: Number, default: 0 }, // 0..100
+  },
+  { _id: false }
+);
 
 const SpotlightSectionSchema = new mongoose.Schema(
   {
-    title: { type: String, required: true },
+    title: { type: String, required: true, trim: true },
 
-    // targeting / scope
-    sectionType: {
+    // audience/scope targeting
+    scopeType: {
       type: String,
-      enum: ['category', 'state', 'city'],
-      required: true,
+      enum: ['global', 'category', 'state', 'city'],
+      default: 'global',
+      index: true,
     },
-    sectionValue: { type: String, required: true }, // e.g., 'Top', 'Delhi', 'Jalandhar'
+    scopeValue: { type: String, default: '', index: true },
 
-    // placement behavior
+    // placement logic
     placement: {
       type: String,
-      enum: ['both', 'scroll', 'swipe'],
+      enum: ['scroll', 'swipe', 'both'],
       default: 'both',
     },
-    afterNth: { type: Number, default: 5 },     // show first after Nth article
-    repeatEvery: { type: Number, default: 0 },  // 0 = show once
-    repeatCount: { type: Number, default: 0 },  // 0 = unlimited
+    afterNth: { type: Number, default: 0 }, // inject after Nth article
+    repeatEvery: { type: Number, default: 0 },
+    repeatCount: { type: Number, default: 0 },
 
-    // enable/disable
     enabled: { type: Boolean, default: true },
 
-    // background config (image OR gradient)
-    background: {
-      kind: { type: String, enum: ['gradient', 'image'], default: 'gradient' },
-
-      // if kind === 'image'
-      imageUrl: { type: String, default: '' }, // Cloudinary URL
-
-      // overlay for either mode (optional)
-      overlayColor: { type: String, default: '#000000' },
-      overlayOpacity: { type: Number, default: 0.0 }, // 0..1
-
-      // if kind === 'gradient'
-      gradient: {
-        colors: { type: [String], default: ['#7A0000', '#E00000'] },
-        orientation: {
-          type: String,
-          enum: ['vertical', 'horizontal'],
-          default: 'vertical',
-        },
-      },
-    },
+    background: { type: BgSchema, default: () => ({}) },
   },
   { timestamps: true }
+);
+
+SpotlightSectionSchema.index(
+  { scopeType: 1, scopeValue: 1, enabled: 1, title: 1 },
+  { name: 'spotlight_section_query' }
 );
 
 module.exports = mongoose.model('SpotlightSection', SpotlightSectionSchema);

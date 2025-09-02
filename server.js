@@ -51,7 +51,7 @@ const liveUpdateHubRouter = require('./routes/liveUpdateHubRouter');
 const rssAggRouter = require('./routes/rssAggRouter');
 const bannerConfigRouter = require('./routes/bannerConfigRouter');
 const featureBannerGroupRouter = require('./routes/featureBannerGroupRouter');
-const spotlightRouter = require('./routes/spotlightRouter'); // ✅ use this variable (don’t re-require inline)
+const spotlightRouter = require('./routes/spotlightRouter');// ✅ use this variable (don’t re-require inline)
 
 const sectionsRouter = require('./routes/sectionsRouter');
 const cartoonRouter = require('./routes/cartoonRouter');
@@ -143,9 +143,6 @@ app.use('/api/feature-banner-groups', featureBannerGroupRouter);
 
 // ✅ Spotlight MUST live under /api to match admin & app fetchers
 app.use('/api/spotlights', spotlightRouter);
-app.use('/spotlights', spotlightRouter);
-app.use('/api/cartoons', cartoonRouter);
-app.use('/api/sections', sectionsRouter);
 
 /* -------- Optional probe for outbound debugging ---------- */
 app.get('/api/_probe', async (req, res) => {
