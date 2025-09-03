@@ -20,6 +20,10 @@ const upload = multer({
 
 router.get('/', controller.getAll);
 router.post('/', upload.single('media'), controller.create);
+
+// 🔽 NEW: update repeat fields without uploading a new file
+router.patch('/:id', controller.update);
+
 router.delete('/:id', controller.delete);
 
 module.exports = router;

@@ -26,12 +26,19 @@ exports.getAll = async (req, res) => {
 
 exports.create = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ message: "File is required (field: 'media')." });
+    if (!req.file) {
+      return res.status(400).json({ message: "File is required (field: 'media')." });
+    }
 
     const kind = inferType(req.file.mimetype);
-    if (!kind) return res.status(400).json({ message: 'Unsupported file type. Use image/* or video/mp4.' });
+    if (!kind) {
+      return res.status(400).json({ message: 'Unsupported file type. Use image/* or video/mp4.' });
+    }
 
     const placementIndex = Math.max(1, parseInt(req.body.placementIndex, 10) || 1);
+    // 🔽 NEW
+    const repeatEvery = Math.max(0, parseInt(req.body.repeatEvery, 10) || 0);
+    const repeatCount = Math.max(0, parseInt(req.body.repeatCount, 10) || 0);
     const targetUrl = (req.body.targetUrl || '').trim();
     const enabled = String(req.body.enabled ?? 'true') === 'true';
 
@@ -53,12 +60,43 @@ exports.create = async (req, res) => {
       targetUrl,
       enabled,
       sortIndex: 0,
+      // 🔽 NEW
+      repeatEvery,
+      repeatCount,
     });
 
     res.status(201).json(doc);
   } catch (err) {
     console.error('❌ SmallAds create error:', err);
     res.status(400).json({ message: 'Failed to create small ad', error: String(err.message || err) });
+  }
+};
+
+// 🔽 NEW: update only the repeat fields (no media upload)
+exports.update = async (req, res) => {
+  try {
+    const id = req.params.id;
+
+    const patch = {};
+    if (req.body.repeatEvery != null) {
+      const n = Math.max(0, parseInt(req.body.repeatEvery, 10) || 0);
+      patch.repeatEvery = n;
+    }
+    if (req.body.repeatCount != null) {
+      const n = Math.max(0, parseInt(req.body.repeatCount, 10) || 0);
+      patch.repeatCount = n;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      return res.status(400).json({ message: 'Nothing to update' });
+    }
+
+    const doc = await SmallAd.findByIdAndUpdate(id, patch, { new: true });
+    if (!doc) return res.status(404).json({ message: 'Not found' });
+    res.json(doc);
+  } catch (err) {
+    console.error('❌ SmallAds update error:', err);
+    res.status(500).json({ message: 'Failed to update small ad' });
   }
 };
 
