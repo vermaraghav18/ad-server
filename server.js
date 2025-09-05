@@ -56,7 +56,7 @@ const spotlight2Router = require('./routes/spotlight2Router');
 const sectionsRouter = require('./routes/sectionsRouter');
 const cartoonRouter = require('./routes/cartoonRouter');
 const videoRouter = require('./routes/videoRouter');
-
+const videoGeoAdsRouter = require('./routes/videoGeoAdsRouter');
 const geoAdsRouter = require('./routes/geoAdsRouter');
 
 const { get: outboundGet } = require('./request');
@@ -149,6 +149,7 @@ app.use('/api/videos', videoRouter);
 app.use('/api/spotlight-2', spotlight2Router);
 // ✅ Spotlight MUST live under /api to match admin & app fetchers
 app.use('/api/spotlights', spotlightRouter);
+app.use('/api/video-geo-ads', videoGeoAdsRouter);
 
 /* -------- Optional probe for outbound debugging ---------- */
 app.get('/api/_probe', async (req, res) => {
