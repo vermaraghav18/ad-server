@@ -1,47 +1,49 @@
 // models/VideoGeoAd.js
 const mongoose = require('mongoose');
 
+function norm(v) {
+  return String(v || '').trim();
+}
+function normLower(v) {
+  return String(v || '').trim().toLowerCase();
+}
+
 const videoGeoAdSchema = new mongoose.Schema(
   {
-    // Display
     title: { type: String, default: '' },
     description: { type: String, default: '' },
 
-    // Clickthrough (CTA)
+    // Destination when user taps the ad
     link: { type: String, required: true },
 
-    // Creative (video-first)
-    videoUrl: { type: String, required: true }, // CDN URL (MP4 or HLS .m3u8)
-    posterUrl: { type: String, default: '' },   // optional poster/thumbnail
-    mime: { type: String, default: '' },        // e.g. "video/mp4" (optional)
+    // Video (HLS mp4/m3u8 etc.)
+    videoUrl: { type: String, required: true },
+    posterUrl: { type: String, default: '' },
+    mime: { type: String, default: '' },
 
-    // Playback flags (client may override)
-    autoplay: { type: Boolean, default: true },
-    muted: { type: Boolean, default: true },
-    loop: { type: Boolean, default: true },
+    // Targeting (existing)
+    cities: { type: [String], default: [] },   // e.g. ["Mumbai"]
+    states: { type: [String], default: [] },   // e.g. ["Maharashtra"]
 
-    // Container style (kept to mirror existing ads)
-    type: { type: String, enum: ['normal', 'fullpage'], default: 'normal' },
+    // ✅ NEW: category targeting for tabs like Top News, Finance
+    // store lowercased keywords like ["top", "finance", "sports"]
+    categories: { type: [String], default: [] },
 
-    // Targeting
-    cities: { type: [String], default: [] },
-    states: { type: [String], default: [] },
-
-    // Placement (1-based)
+    // Placement controls
     afterNth: { type: Number, default: 1 },
-    repeatEvery: { type: Number, default: 0 },  // 0 = show once
-    repeatCount: { type: Number, default: 0 },  // 0 = unlimited
+    repeatEvery: { type: Number, default: 0 },
+    repeatCount: { type: Number, default: 0 },
 
-    // Enable/disable
     enabled: { type: Boolean, default: true },
   },
   { timestamps: true }
 );
 
-// normalize targeting entries to trimmed lower-case (optional but helpful)
+// Normalize arrays on save/update
 videoGeoAdSchema.pre('save', function (next) {
-  this.cities = (this.cities || []).map(s => String(s || '').trim());
-  this.states = (this.states || []).map(s => String(s || '').trim());
+  this.cities = (this.cities || []).map(norm);
+  this.states = (this.states || []).map(norm);
+  this.categories = (this.categories || []).map(normLower);
   next();
 });
 
